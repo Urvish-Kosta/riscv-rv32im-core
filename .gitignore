@@ -1,0 +1,41 @@
+# ---- Verilator ----
+obj_dir/
+*.vcd
+*.fst
+*.fst.hier
+verilator.log
+
+# ---- Icarus / sim outputs ----
+*.vvp
+*.out
+*.log
+sw/tests/build/
+
+# ---- RISC-V build artifacts ----
+*.elf
+*.o
+*.a
+*.bin
+*.hex
+*.dump
+*.map
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---- Toolchain build tree (if PREFIX points inside repo) ----
+/riscv/
+/toolchain/
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ---- Keep intentionally-empty dirs ----
+!**/.gitkeep

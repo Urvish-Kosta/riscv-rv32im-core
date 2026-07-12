@@ -30,4 +30,4 @@ jobs:
       - name: Run RV32I self-checking test suite (single-cycle)
         run: make -C sw/tests run
       - name: Pipeline differential vs single-cycle reference (M2)
-        run: ./scripts/run_pipe_diff.sh
+        run: bash scripts/run_pipe_diff.sh

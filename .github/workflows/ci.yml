@@ -25,7 +25,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y verilator clang lld llvm python3
-      - name: Build the core simulator
-        run: make -C sim/verilator
-      - name: Run RV32I self-checking test suite
+      - name: Build both cores (single-cycle + pipeline)
+        run: make -C sim/verilator both
+      - name: Run RV32I self-checking test suite (single-cycle)
         run: make -C sw/tests run
+      - name: Pipeline differential vs single-cycle reference (M2)
+        run: ./scripts/run_pipe_diff.sh

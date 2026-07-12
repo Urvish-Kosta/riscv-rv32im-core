@@ -1,17 +1,29 @@
 // -----------------------------------------------------------------------------
-// main.cpp  --  Verilator test harness for core_top (M1)
+// main.cpp  --  Verilator test harness (shared by both cores)
+//
+// Selects the DUT at compile time:
+//   -DDUT_PIPE  -> core_pipe  (5-stage pipeline, M2)
+//   (default)   -> core_top   (single-cycle reference, M1)
 //
 // Loads a program via +hex=<file> (consumed by the RTL memories), runs the core,
 // and implements the HTIF `tohost` exit protocol: a store to TOHOST ends the
-// simulation.  tohost value 1 => PASS (exit 0); value (N<<1)|1 => FAIL code N.
+// simulation. tohost value 1 => PASS (exit 0); value (N<<1)|1 => FAIL code N.
+// On halt the raw 32-bit tohost value is printed, so a driver can compare the
+// pipeline against the single-cycle reference bit-for-bit.
 //
-//   ./obj_dir/Vcore_top +hex=prog.hex [+max_cycles=N] [+trace]
-//
-// +trace prints a one-line retire record per cycle (single-cycle core retires
-// one instruction/cycle) and dumps wave.vcd when built with --trace.
+//   ./Vcore_top  +hex=prog.hex [+max_cycles=N] [+trace]
+//   ./Vcore_pipe +hex=prog.hex [+max_cycles=N] [+trace]
 // -----------------------------------------------------------------------------
 #include <verilated.h>
-#include "Vcore_top.h"
+
+#if defined(DUT_PIPE)
+  #include "Vcore_pipe.h"
+  using Dut = Vcore_pipe;
+#else
+  #include "Vcore_top.h"
+  using Dut = Vcore_top;
+#endif
+
 #if VM_TRACE
 #include <verilated_vcd_c.h>
 #endif
@@ -39,7 +51,7 @@ int main(int argc, char** argv) {
     const uint64_t max_cycles = plusarg_u(ctx.get(), "max_cycles", 100000);
     const bool     trace_on   = plusarg_set(ctx.get(), "trace");
 
-    const std::unique_ptr<Vcore_top> dut{new Vcore_top{ctx.get()}};
+    const std::unique_ptr<Dut> dut{new Dut{ctx.get()}};
 
 #if VM_TRACE
     std::unique_ptr<VerilatedVcdC> tfp;
@@ -66,11 +78,11 @@ int main(int argc, char** argv) {
     half(0); half(1); half(0); half(1);
     dut->rst_n = 1;
 
-    int exit_code = -1;
+    int      exit_code = -1;
+    uint32_t tohost_val = 0;
     uint64_t cyc = 0;
     for (; cyc < max_cycles; ++cyc) {
-        // Low phase: combinational settled for the instruction now executing.
-        half(0);
+        half(0);   // low phase: combinational settled
 
         if (trace_on) {
             std::printf("[%6llu] pc=%08x instr=%08x",
@@ -84,15 +96,13 @@ int main(int argc, char** argv) {
             std::printf("\n");
         }
 
-        // HTIF tohost exit check.
         if (dut->dbg_dmem_we && dut->dbg_dmem_addr == TOHOST) {
-            const uint32_t v = dut->dbg_dmem_wdata;
-            exit_code = (v == 1u) ? 0 : (int)(v >> 1);
-            half(1);            // let the store commit
+            tohost_val = dut->dbg_dmem_wdata;
+            exit_code  = (tohost_val == 1u) ? 0 : (int)(tohost_val >> 1);
+            half(1);
             break;
         }
-        // High phase: posedge commits PC / regfile / dmem.
-        half(1);
+        half(1);   // high phase: posedge commits state
     }
 
 #if VM_TRACE
@@ -104,7 +114,8 @@ int main(int argc, char** argv) {
                     (unsigned long long)cyc);
         return 124;
     }
-    std::printf("[core] halted @cycle %llu  ->  %s (exit=%d)\n",
-                (unsigned long long)cyc, exit_code == 0 ? "PASS" : "FAIL", exit_code);
+    std::printf("[core] halted @cycle %llu  tohost=0x%08x  ->  %s (exit=%d)\n",
+                (unsigned long long)cyc, tohost_val,
+                exit_code == 0 ? "PASS" : "FAIL", exit_code);
     return exit_code;
 }

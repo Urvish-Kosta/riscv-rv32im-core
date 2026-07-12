@@ -74,7 +74,7 @@ Run it with:
 
 ```sh
 make -C sim/verilator both
-./scripts/run_pipe_diff.sh
+bash scripts/run_pipe_diff.sh
 ```
 
 What it checks (`sw/tests/pipe/`, `tools/gen_pipe_test.py`):

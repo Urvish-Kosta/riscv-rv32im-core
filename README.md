@@ -7,7 +7,7 @@ viewer for CPI/IPC analysis.
 
 [![CI](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-M1%20single--cycle%20RV32I-yellow)
+![Status](https://img.shields.io/badge/status-M2%205--stage%20pipeline-yellow)
 
 > **Scope (honest, verbatim):** *Designed and verified entirely in simulation
 > (Verilator + Icarus). Not run on FPGA or silicon. All performance figures are
@@ -17,14 +17,18 @@ viewer for CPI/IPC analysis.
 
 ## Project status
 
-**Current milestone: M1 — single-cycle RV32I core.** The full RV32I base
-integer instruction set runs on a from-scratch single-cycle datapath
-(`rtl/core/core_top.sv` + `regfile`, `alu`, `imm_gen`, `control`, `imem`,
-`dmem`). It is verified by self-checking directed tests under Verilator (an
-independent oracle — expected values are derived from the ISA, not the core);
-all currently pass, and the M0 `hello` program also runs to a `tohost` PASS.
-The M0 placeholder DUT has been removed, as planned. This single-cycle core is
-the **functional reference** the pipelined core (M2+) is checked against.
+**Current milestone: M2 — 5-stage pipeline (no hazard logic yet).** The
+datapath is now pipelined into IF/ID/EX/MEM/WB (`rtl/core/core_pipe.sv`), with
+branches/jumps resolved in EX. This milestone deliberately has **no forwarding,
+stalls, or branch flush**, so it is correct only on hazard-free code; general
+correctness arrives at M3. The single-cycle core (`rtl/core/core_top.sv`)
+remains as the trusted **functional reference**.
+
+The pipeline is verified **differentially against that reference**: hazard-free
+directed programs plus randomized (seeded) programs all produce a bit-identical
+result signature on both cores, one directed case also matches a hand-derived
+signature, and an intentionally-hazardous case provably diverges (confirming the
+core is genuinely un-forwarded). All M1 self-checking tests still pass.
 
 There are **no measured performance results yet.** CPI/IPC, misprediction rates,
 and stall breakdowns are produced only from committed, re-runnable scripts at
@@ -34,7 +38,7 @@ M5–M6, and this README will not state any such number before it has been measu
 |---|---|---|
 | **M0** | Repo skeleton, toolchain install/verify, Spike hello, Verilator smoke, CI | **done** |
 | **M1** | Single-cycle RV32I (functional reference), self-checking directed tests | **done** |
-| M2 | Pipeline the datapath (no hazard logic yet) | not started |
+| **M2** | Pipeline the datapath (no hazard logic yet) | **done** |
 | M3 | Hazard detection + forwarding + control hazards; full RV32I `riscv-tests` | not started |
 | M4 | RV32M mul/div (multi-cycle) + minimal Zicsr counters | not started |
 | M5 | Branch prediction (bimodal → gshare) + perf counters + measured CPI | not started |
@@ -55,7 +59,7 @@ the official `riscv-tests`.
 
 ```
 riscv-rv32im-core/
-├── rtl/            core RTL (core/, mem/, include/riscv_pkg.sv)   # M1: single-cycle RV32I
+├── rtl/            core RTL (core/, mem/, include/riscv_pkg.sv)   # M2: single-cycle + pipeline
 ├── sim/            Verilator harness (verilator/) + committed waves (waves/)
 ├── sw/             test programs (common/ linker+crt, tests/, benchmarks/)
 ├── tools/          Python trace viewer / trace-compare / perf report / plot
@@ -71,9 +75,13 @@ riscv-rv32im-core/
 # 1. Install + verify the simulation toolchain (Ubuntu/Debian; macOS notes inside)
 ./scripts/build_toolchain.sh          # or: ./scripts/build_toolchain.sh --check
 
-# 2. Build the core simulator and run the RV32I self-checking test suite
-make -C sim/verilator                 # builds ./sim/verilator/obj_dir/Vcore_top
+# 2a. Single-cycle core + RV32I self-checking suite
+make -C sim/verilator                 # builds obj_dir/Vcore_top
 make -C sw/tests run                  # assembles every test, runs it, reports pass/fail
+
+# 2b. Pipeline (M2): differential check vs the single-cycle reference
+make -C sim/verilator pipe            # builds obj_dir_pipe/Vcore_pipe
+./scripts/run_pipe_diff.sh            # directed + randomized hazard-free programs
 
 # (or) run the staged smoke script, which self-skips any missing tool
 ./scripts/run_tests.sh

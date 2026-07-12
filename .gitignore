@@ -10,6 +10,7 @@ verilator.log
 *.out
 *.log
 sw/tests/build/
+sw/tests/pipe/build/
 
 # ---- RISC-V build artifacts ----
 *.elf

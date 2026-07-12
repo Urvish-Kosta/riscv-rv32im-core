@@ -82,3 +82,22 @@ environment. **Trade-off:** narrower mechanical coverage than lockstep
 trace-comparison over large compiled programs; that stronger method
 (Spike + `riscv-tests`) is the plan of record at **M3**, using the same `tohost`
 protocol these tests already exercise, so it is additive rather than a rewrite.
+
+### #011 — Branches/jumps resolved in EX; no flush at M2 · Decided · M2
+**Choice:** the pipeline resolves control transfers in EX and redirects the PC,
+but does **not** squash the two younger instructions already in IF/ID at M2.
+**Why:** it isolates the datapath-staging work (M2) from control-hazard handling
+(M3); the redirect path is correct, only the flush is deferred. **Trade-off:**
+two architectural delay slots at M2, so M2 code must be hazard-free; M3 adds the
+flush and the delay slots disappear.
+
+### #012 — Verify the pipeline differentially against the single-cycle core · Decided · M2
+**Choice:** check `core_pipe` by running hazard-free programs on both it and the
+verified single-cycle `core_top` and comparing a `tohost` result signature,
+including randomized seeded programs and one hand-derived anchor. **Why:** the
+single-cycle core is already an independent-oracle-tested reference, so a
+bit-for-bit signature match is strong evidence of datapath correctness without
+needing Spike in this environment. An intentionally-hazardous case asserts the
+*absence* of forwarding, so the test is meaningful and not vacuously passing.
+**Trade-off:** covers only hazard-free code at M2 — exactly this milestone's
+scope; Spike lockstep over arbitrary programs remains the M3 plan of record.

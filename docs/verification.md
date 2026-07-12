@@ -59,3 +59,35 @@ former; M3 adds the latter.
   those are produced only from committed scripts at M5-M6.
 - Where a method is *planned* (Spike lockstep, `riscv-tests`), it is labelled as
   planned, not presented as already done.
+
+---
+
+## M2 — pipeline vs. single-cycle (differential)
+
+The 5-stage pipeline (`core_pipe`) has no hazard logic yet, so it is verified on
+**hazard-free** programs by differential comparison against the single-cycle
+reference (`core_top`), which is itself verified against hand-derived ISA values
+(above). Both cores run the same image and write a 32-bit result **signature**
+to `tohost`; the signatures must match.
+
+Run it with:
+
+```sh
+make -C sim/verilator both
+./scripts/run_pipe_diff.sh
+```
+
+What it checks (`sw/tests/pipe/`, `tools/gen_pipe_test.py`):
+
+| Case | Purpose |
+|---|---|
+| `pipe_smoke` | small program; signature also matches a **hand-derived** `0x0000000a` (oracle independent of both cores) |
+| `pipe_alu`   | broad ALU coverage; pipeline signature == reference |
+| `pipe_ldst`  | loads/stores through MEM (byte/half/word, sign/zero ext); == reference |
+| `rand_s1..s8`| randomized hazard-free programs (committed seeds); each == reference |
+| `xfail_hazard_demo` | **intentionally hazardous**; MUST diverge from the reference, proving the pipeline is genuinely un-forwarded (reference `0xc`, pipeline `0x0`) |
+
+All hazard-free cases match bit-for-bit; the hazardous case diverges as required.
+The programs are branch-free and insert three NOPs after every real instruction,
+which is the spacing a forwarding-free pipeline needs. M3 removes that constraint
+(forwarding + stalls + flush) and folds these programs into the general suite.

@@ -73,18 +73,16 @@ riscv-rv32im-core/
 
 ```sh
 # 1. Install + verify the simulation toolchain (Ubuntu/Debian; macOS notes inside)
-./scripts/build_toolchain.sh          # or: ./scripts/build_toolchain.sh --check
-
+bash scripts/build_toolchain.sh        # or: bash scripts/build_toolchain.sh --check
 # 2a. Single-cycle core + RV32I self-checking suite
 make -C sim/verilator                 # builds obj_dir/Vcore_top
 make -C sw/tests run                  # assembles every test, runs it, reports pass/fail
 
 # 2b. Pipeline (M2): differential check vs the single-cycle reference
 make -C sim/verilator pipe            # builds obj_dir_pipe/Vcore_pipe
-./scripts/run_pipe_diff.sh            # directed + randomized hazard-free programs
-
+bash scripts/run_pipe_diff.sh          # directed + randomized hazard-free programs
 # (or) run the staged smoke script, which self-skips any missing tool
-./scripts/run_tests.sh
+bash scripts/run_tests.sh
 ```
 
 The test Makefile auto-detects a `riscv*-unknown-elf` GNU toolchain and falls

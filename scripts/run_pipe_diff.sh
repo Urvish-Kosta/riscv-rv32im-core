@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run_pipe_diff.sh -- M2 differential verification.
+# run_pipe_diff.sh -- pipeline differential verification (M3).
 #
-# Builds each hazard-free pipeline program and runs it on BOTH cores:
-#   * core_top  (single-cycle, the trusted reference)
-#   * core_pipe (the 5-stage pipeline under test)
-# and checks that the value each writes to `tohost` (a 32-bit result signature)
-# is identical. pipe_smoke additionally has a hand-derived expected signature
-# (0x0000000a), giving an oracle independent of both cores.
+# The pipeline (core_pipe: forwarding + load-use stall + branch flush) is
+# checked against the single-cycle reference (core_top), which is itself
+# verified against hand-derived ISA values. Both run the same image and write a
+# 32-bit signature to `tohost`; signatures must match on every program:
+#   * directed hazard-free programs (M2 set, one with a hand-derived anchor)
+#   * hazard_demo -- dense back-to-back RAW chains (diverged at M2, must match now)
+#   * randomized hazard-free programs (committed seeds)
+#   * randomized HAZARDOUS programs (no padding; RAW chains, load-use, stores)
+# Finally the full M1 self-checking ISA suite is run directly on the pipeline.
 # =============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# ---- toolchain autodetect (riscv gcc, else clang cross) ----
 RISCV_PREFIX=""
 for p in riscv32-unknown-elf- riscv64-unknown-elf- riscv-none-elf-; do
   command -v "${p}gcc" >/dev/null 2>&1 && { RISCV_PREFIX="$p"; break; }
@@ -31,49 +33,54 @@ CORE=sim/verilator/obj_dir/Vcore_top
 PIPE=sim/verilator/obj_dir_pipe/Vcore_pipe
 
 B=sw/tests/pipe/build; mkdir -p "$B"
-# expected hand-derived signatures (only where an independent value is known)
-declare -A EXPECT=( [pipe_smoke]="0x0000000a" )
+declare -A EXPECT=( [pipe_smoke]="0x0000000a" [hazard_demo]="0x0000000c" )
 
-sig() { # run $1 sim on $2 hex, echo the tohost hex (ignore nonzero exit code)
-  "$1" +hex="$2" +max_cycles=20000 2>&1 | grep -oE 'tohost=0x[0-9a-f]{8}' | cut -d= -f2
-}
+sig() { "$1" +hex="$2" +max_cycles=40000 2>&1 | grep -oE 'tohost=0x[0-9a-f]{8}' | cut -d= -f2; }
 
 pass=0; fail=0
-for src in sw/tests/pipe/*.S; do
-  name="$(basename "$src" .S)"
-  [[ "$name" == xfail_* ]] && continue
+check() { # name hexfile
+  local name="$1" hex="$2"
+  local s_ref s_pipe exp ok=1
+  s_ref="$(sig "$CORE" "$hex")"; s_pipe="$(sig "$PIPE" "$hex")"
+  exp="${EXPECT[$name]:-}"
+  printf "  %-14s ref=%s pipe=%s" "$name" "$s_ref" "$s_pipe"
+  [[ -n "$s_ref" && "$s_ref" == "$s_pipe" ]] || ok=0
+  if [[ -n "$exp" ]]; then printf " expect=%s" "$exp"; [[ "$s_pipe" == "$exp" ]] || ok=0; fi
+  if [[ $ok -eq 1 ]]; then echo "  PASS"; ((pass++)); else echo "  FAIL"; ((fail++)); fi
+}
+
+build_S() { # src.S -> hex path echoed
+  local src="$1" name; name="$(basename "$src" .S)"
   $CC $CFLAGS "$src" -o "$B/$name.elf"
   $OBJCOPY -O binary "$B/$name.elf" "$B/$name.bin"
   python3 tools/bin2hex.py "$B/$name.bin" "$B/$name.hex"
-  s_ref="$(sig "$CORE" "$B/$name.hex")"
-  s_pipe="$(sig "$PIPE" "$B/$name.hex")"
-  exp="${EXPECT[$name]:-}"
-  printf "  %-12s ref=%s pipe=%s" "$name" "$s_ref" "$s_pipe"
-  ok=1
-  [[ "$s_ref" == "$s_pipe" ]] || ok=0
-  if [[ -n "$exp" ]]; then printf " expect=%s" "$exp"; [[ "$s_pipe" == "$exp" ]] || ok=0; fi
-  if [[ $ok -eq 1 && -n "$s_ref" ]]; then echo "  PASS"; ((pass++)); else echo "  FAIL"; ((fail++)); fi
-done
-# expected-divergence: hazardous code must differ (proves no forwarding yet)
-$CC $CFLAGS sw/tests/pipe/xfail_hazard_demo.S -o "$B/xfail_hazard_demo.elf"
-$OBJCOPY -O binary "$B/xfail_hazard_demo.elf" "$B/xfail_hazard_demo.bin"
-python3 tools/bin2hex.py "$B/xfail_hazard_demo.bin" "$B/xfail_hazard_demo.hex"
-xr="$(sig "$CORE" "$B/xfail_hazard_demo.hex")"; xp="$(sig "$PIPE" "$B/xfail_hazard_demo.hex")"
-printf "  %-12s ref=%s pipe=%s" "xfail_hazard" "$xr" "$xp"
-if [[ -n "$xr" && "$xr" != "$xp" ]]; then echo "  DIVERGES (expected, no fwd yet)"; ((pass++)); else echo "  UNEXPECTED MATCH"; ((fail++)); fi
+  echo "$B/$name.hex"
+}
 
-echo "  -- randomized differential (committed seeds) --"
-for seed in 1 2 3 4 5 6 7 8; do
-  name="rand_s${seed}"
-  python3 tools/gen_pipe_test.py "$seed" 40 > "$B/$name.S"
-  $CC $CFLAGS "$B/$name.S" -o "$B/$name.elf"
-  $OBJCOPY -O binary "$B/$name.elf" "$B/$name.bin"
-  python3 tools/bin2hex.py "$B/$name.bin" "$B/$name.hex"
-  s_ref="$(sig "$CORE" "$B/$name.hex")"
-  s_pipe="$(sig "$PIPE" "$B/$name.hex")"
-  printf "  %-12s ref=%s pipe=%s" "$name" "$s_ref" "$s_pipe"
-  if [[ -n "$s_ref" && "$s_ref" == "$s_pipe" ]]; then echo "  PASS"; ((pass++)); else echo "  FAIL"; ((fail++)); fi
+echo "  -- directed --"
+for src in sw/tests/pipe/*.S; do
+  check "$(basename "$src" .S)" "$(build_S "$src")"
 done
+
+echo "  -- randomized hazard-free (committed seeds) --"
+for seed in 1 2 3 4; do
+  python3 tools/gen_pipe_test.py "$seed" 40 > "$B/rand_s${seed}.S"
+  check "rand_s${seed}" "$(build_S "$B/rand_s${seed}.S")"
+done
+
+echo "  -- randomized HAZARDOUS (committed seeds) --"
+for seed in 11 12 13 14 15 16 17 18; do
+  python3 tools/gen_pipe_test.py "$seed" 60 --hazard > "$B/hz_s${seed}.S"
+  check "hz_s${seed}" "$(build_S "$B/hz_s${seed}.S")"
+done
+
+echo "  -- M1 self-checking ISA suite on the PIPELINE --"
+if make -C sw/tests run SIM=../../sim/verilator/obj_dir_pipe/Vcore_pipe | sed 's/^/  /' | tail -3; then
+  ((pass++))
+else
+  echo "  ISA-on-pipeline FAILED"; ((fail++))
+fi
+
 echo "  ------------------------------------------"
-echo "  pipe-vs-reference: passed=$pass failed=$fail"
+echo "  pipeline verification: passed=$pass failed=$fail"
 [[ $fail -eq 0 ]]

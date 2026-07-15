@@ -1,20 +1,26 @@
 // -----------------------------------------------------------------------------
-// core_pipe.sv  --  5-stage pipelined RV32I core (milestone M2)
+// core_pipe.sv  --  5-stage pipelined RV32I core (milestone M3: full hazard logic)
 //
 // Stages: IF -> ID -> EX -> MEM -> WB, with explicit pipeline registers.
 // Branches and jumps are resolved in EX and redirect the PC.
 //
-// *** NO HAZARD LOGIC YET (by design, for M2). ***
-//   - No data forwarding: a dependent instruction must be >= 3 instructions
-//     after its producer (2 independent instrs / NOPs between them).
-//   - No pipeline stalls.
-//   - No branch flush: the two instructions fetched after a control transfer
-//     are NOT squashed, so a taken branch/jump has two architectural delay
-//     slots. Hazard-free (or delay-slot-padded) code only.
-// Correctness on general code arrives at M3 (forwarding + stalls + flush).
+// Hazard handling (new at M3):
+//   - Data forwarding into EX from EX/MEM (ALU result / pc+4, never load
+//     data) and from MEM/WB (final writeback value).
+//   - WB -> ID bypass: the shared regfile is sync-write/comb-read, so a value
+//     being written back is bypassed to a reader in ID the same cycle. (The
+//     regfile itself is not write-first: in the single-cycle core that would
+//     form a combinational loop through its own writeback path.)
+//   - Load-use stall: a load in EX with a dependent consumer in ID stalls
+//     IF/ID for one cycle and inserts one bubble into EX; MEM/WB forwarding
+//     then supplies the loaded value.
+//   - Control flush: a redirect from EX (taken branch, JAL, JALR) squashes
+//     the two younger instructions in IF/ID and ID/EX.
+// The core is therefore correct on arbitrary RV32I code (no NOP padding, no
+// delay slots).
 //
 // The single-cycle core (core_top.sv) remains the functional reference this
-// pipeline is checked against on hazard-free programs.
+// pipeline is verified against differentially.
 //
 // dbg_* outputs mirror core_top's: dmem write port is taken from MEM (for the
 // HTIF tohost exit), and the retire trace (pc/instr/rd) is taken from WB.
@@ -40,6 +46,9 @@ module core_pipe import riscv_pkg::*; (
     logic            redirect;
     logic [XLEN-1:0] redirect_pc;
 
+    // Load-use stall (declared early; driven in the hazard section).
+    logic            stall;
+
     // ========================================================= IF
     logic [XLEN-1:0] pc_if, pc_next, pc_plus4_if;
     logic [31:0]     instr_if;
@@ -48,8 +57,10 @@ module core_pipe import riscv_pkg::*; (
     assign pc_next     = redirect ? redirect_pc : pc_plus4_if;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) pc_if <= RESET_PC;
-        else        pc_if <= pc_next;
+        if (!rst_n)      pc_if <= RESET_PC;
+        else if (!stall) pc_if <= pc_next;   // hold PC on a load-use stall
+        // (stall and redirect are mutually exclusive: stall requires a load
+        //  in EX, and a load never redirects)
     end
 
     imem u_imem (.addr(pc_if), .rdata(instr_if));
@@ -61,7 +72,10 @@ module core_pipe import riscv_pkg::*; (
         if (!rst_n) begin
             ifid_pc    <= RESET_PC;
             ifid_instr <= 32'h0000_0013;   // NOP bubble
-        end else begin
+        end else if (redirect) begin       // flush the wrong-path fetch
+            ifid_pc    <= RESET_PC;
+            ifid_instr <= 32'h0000_0013;
+        end else if (!stall) begin         // hold on a load-use stall
             ifid_pc    <= pc_if;
             ifid_instr <= instr_if;
         end
@@ -92,18 +106,24 @@ module core_pipe import riscv_pkg::*; (
         .wb_sel(id_wb_sel), .is_branch(id_is_branch), .is_jal(id_is_jal), .is_jalr(id_is_jalr)
     );
 
-    logic [XLEN-1:0] id_rs1d, id_rs2d;
+    logic [XLEN-1:0] id_rs1d_raw, id_rs2d_raw, id_rs1d, id_rs2d;
     regfile u_rf (
         .clk(clk), .we(wb_reg_write),
         .rs1_addr(id_rs1), .rs2_addr(id_rs2), .rd_addr(wb_rd),
-        .rd_data(wb_data), .rs1_data(id_rs1d), .rs2_data(id_rs2d)
+        .rd_data(wb_data), .rs1_data(id_rs1d_raw), .rs2_data(id_rs2d_raw)
     );
+
+    // WB -> ID bypass: the regfile write lands on this posedge, so a reader in
+    // ID would otherwise see the stale value (sync write, comb read).
+    assign id_rs1d = (wb_reg_write && wb_rd != 5'd0 && wb_rd == id_rs1) ? wb_data : id_rs1d_raw;
+    assign id_rs2d = (wb_reg_write && wb_rd != 5'd0 && wb_rd == id_rs2) ? wb_data : id_rs2d_raw;
 
     logic [XLEN-1:0] id_imm;
     imm_gen u_immgen (.instr(ifid_instr), .sel(id_imm_sel), .imm(id_imm));
 
     // ID/EX
     logic [XLEN-1:0] idex_pc, idex_rs1d, idex_rs2d, idex_imm;
+    logic [4:0]      idex_rs1, idex_rs2;
     logic [4:0]      idex_rd;
     logic [2:0]      idex_funct3;
     logic [31:0]     idex_instr;
@@ -113,12 +133,16 @@ module core_pipe import riscv_pkg::*; (
     wb_sel_e         idex_wb_sel;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
+        if (!rst_n || redirect || stall) begin
+            // Bubble: on reset, on a control flush (squash the wrong-path
+            // instruction in ID), or on a load-use stall (insert the bubble
+            // that separates load and consumer).
             idex_reg_write <= 1'b0; idex_mem_write <= 1'b0;
             idex_is_branch <= 1'b0; idex_is_jal <= 1'b0; idex_is_jalr <= 1'b0;
             idex_alu_src_imm <= 1'b0; idex_alu_a_pc <= 1'b0;
             idex_alu_op <= ALU_ADD; idex_wb_sel <= WB_ALU;
             idex_pc <= RESET_PC; idex_rs1d <= '0; idex_rs2d <= '0; idex_imm <= '0;
+            idex_rs1 <= 5'd0; idex_rs2 <= 5'd0;
             idex_rd <= 5'd0; idex_funct3 <= 3'd0; idex_instr <= 32'h0000_0013;
         end else begin
             idex_reg_write <= id_reg_write; idex_mem_write <= id_mem_write;
@@ -126,22 +150,46 @@ module core_pipe import riscv_pkg::*; (
             idex_alu_src_imm <= id_alu_src_imm; idex_alu_a_pc <= id_alu_a_pc;
             idex_alu_op <= id_alu_op; idex_wb_sel <= id_wb_sel;
             idex_pc <= ifid_pc; idex_rs1d <= id_rs1d; idex_rs2d <= id_rs2d; idex_imm <= id_imm;
+            idex_rs1 <= id_rs1; idex_rs2 <= id_rs2;
             idex_rd <= id_rd; idex_funct3 <= id_funct3; idex_instr <= ifid_instr;
         end
     end
 
     // ========================================================= EX
+    // ---- forwarding (M3) ----
+    // EX/MEM forwards its ALU result or pc+4 (never load data: a dependent
+    // consumer of a load is separated by the load-use stall, after which the
+    // value arrives via the MEM/WB path). MEM/WB forwards the final writeback
+    // value, which covers ALU results, pc+4 and load data alike.
+    // Priority: EX/MEM (younger) over MEM/WB (older).
+    logic [XLEN-1:0] exmem_fwd_val;   // defined after EX/MEM regs; forward decl
+    logic            exmem_fwd_ok;
+    logic [XLEN-1:0] ex_rs1_fwd, ex_rs2_fwd;
+
+    always_comb begin
+        ex_rs1_fwd = idex_rs1d;
+        if (idex_rs1 != 5'd0) begin
+            if (exmem_fwd_ok && exmem_rd == idex_rs1)           ex_rs1_fwd = exmem_fwd_val;
+            else if (memwb_reg_write && memwb_rd == idex_rs1)   ex_rs1_fwd = memwb_data;
+        end
+        ex_rs2_fwd = idex_rs2d;
+        if (idex_rs2 != 5'd0) begin
+            if (exmem_fwd_ok && exmem_rd == idex_rs2)           ex_rs2_fwd = exmem_fwd_val;
+            else if (memwb_reg_write && memwb_rd == idex_rs2)   ex_rs2_fwd = memwb_data;
+        end
+    end
+
     logic [XLEN-1:0] ex_alu_a, ex_alu_b, ex_alu_y, ex_pc4;
-    assign ex_alu_a = idex_alu_a_pc    ? idex_pc  : idex_rs1d;
-    assign ex_alu_b = idex_alu_src_imm ? idex_imm : idex_rs2d;
+    assign ex_alu_a = idex_alu_a_pc    ? idex_pc  : ex_rs1_fwd;
+    assign ex_alu_b = idex_alu_src_imm ? idex_imm : ex_rs2_fwd;
     assign ex_pc4   = idex_pc + 32'd4;
 
     alu u_alu (.op(idex_alu_op), .a(ex_alu_a), .b(ex_alu_b), .y(ex_alu_y));
 
     logic ex_eq, ex_lts, ex_ltu, ex_branch_taken;
-    assign ex_eq  = (idex_rs1d == idex_rs2d);
-    assign ex_lts = ($signed(idex_rs1d) < $signed(idex_rs2d));
-    assign ex_ltu = (idex_rs1d < idex_rs2d);
+    assign ex_eq  = (ex_rs1_fwd == ex_rs2_fwd);
+    assign ex_lts = ($signed(ex_rs1_fwd) < $signed(ex_rs2_fwd));
+    assign ex_ltu = (ex_rs1_fwd < ex_rs2_fwd);
 
     always_comb begin
         ex_branch_taken = 1'b0;
@@ -164,7 +212,7 @@ module core_pipe import riscv_pkg::*; (
         if (idex_is_jal) begin
             redirect = 1'b1; redirect_pc = idex_pc + idex_imm;
         end else if (idex_is_jalr) begin
-            redirect = 1'b1; redirect_pc = (idex_rs1d + idex_imm) & ~32'h1;
+            redirect = 1'b1; redirect_pc = (ex_rs1_fwd + idex_imm) & ~32'h1;
         end else if (idex_is_branch && ex_branch_taken) begin
             redirect = 1'b1; redirect_pc = idex_pc + idex_imm;
         end
@@ -186,11 +234,16 @@ module core_pipe import riscv_pkg::*; (
         end else begin
             exmem_reg_write <= idex_reg_write; exmem_mem_write <= idex_mem_write;
             exmem_wb_sel <= idex_wb_sel;
-            exmem_alu_y <= ex_alu_y; exmem_rs2d <= idex_rs2d; exmem_pc4 <= ex_pc4;
+            exmem_alu_y <= ex_alu_y; exmem_rs2d <= ex_rs2_fwd; exmem_pc4 <= ex_pc4;
             exmem_pc <= idex_pc; exmem_rd <= idex_rd; exmem_funct3 <= idex_funct3;
             exmem_instr <= idex_instr;
         end
     end
+
+    // EX/MEM forward source: valid when the instruction writes a register and
+    // its value is already known in MEM (ALU result or pc+4) -- i.e. not a load.
+    assign exmem_fwd_ok  = exmem_reg_write && (exmem_rd != 5'd0) && (exmem_wb_sel != WB_MEM);
+    assign exmem_fwd_val = (exmem_wb_sel == WB_PC4) ? exmem_pc4 : exmem_alu_y;
 
     // ========================================================= MEM
     logic [XLEN-1:0] mem_rword, mem_load_data, mem_wb_data;
@@ -238,6 +291,15 @@ module core_pipe import riscv_pkg::*; (
             memwb_rd <= exmem_rd; memwb_pc <= exmem_pc; memwb_instr <= exmem_instr;
         end
     end
+
+    // ================================================== hazard detection (M3)
+    // Load-use: a load in EX whose destination is a source of the instruction
+    // in ID. Stall IF/PC one cycle and inject a bubble into EX; the consumer
+    // then picks the loaded value up via the MEM/WB forwarding path.
+    logic idex_is_load;
+    assign idex_is_load = (idex_wb_sel == WB_MEM) && idex_reg_write;
+    assign stall = idex_is_load && (idex_rd != 5'd0) &&
+                   ((idex_rd == id_rs1) || (idex_rd == id_rs2));
 
     // ========================================================= WB
     assign wb_reg_write = memwb_reg_write;

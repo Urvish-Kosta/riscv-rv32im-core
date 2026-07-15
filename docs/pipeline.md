@@ -1,6 +1,6 @@
 # Pipeline (stage-by-stage)
 
-> **Status:** current as of milestone **M2** (5-stage pipeline, no hazard logic).
+> **Status:** current as of milestone **M3** (full hazard handling).
 
 The pipelined core (`rtl/core/core_pipe.sv`) splits the single-cycle datapath
 into five stages separated by pipeline registers. It reuses the same leaf
@@ -35,27 +35,40 @@ IF ──▶ IF/ID ──▶ ID ──▶ ID/EX ──▶ EX ──▶ EX/MEM �
 (Each register also carries `pc`/`instr` for the retire trace; those bits are
 debug-only and would be stripped for synthesis.)
 
-## What is intentionally missing at M2
+## Hazard handling (M3)
 
-This milestone builds the **structure** of the pipeline with **no hazard
-handling**:
+The core is correct on **arbitrary RV32I code** — no NOP padding, no delay
+slots. Four mechanisms cooperate:
 
-- **No data forwarding.** A dependent instruction reads its operands in ID while
-  the producer may still be in EX/MEM/WB. Without forwarding it must be at least
-  three instructions after its producer (two independent instructions or NOPs in
-  between).
-- **No stalls.** Nothing detects a load-use hazard and inserts a bubble.
-- **No branch flush.** Branches/jumps resolve in EX and redirect the PC, but the
-  two instructions already fetched behind them are **not** squashed — a taken
-  control transfer therefore has two architectural delay slots.
+- **Forwarding into EX.** Operand muxes ahead of the ALU select, per source
+  register (priority: youngest first):
+  1. **EX/MEM** — the instruction one ahead, *if* its value already exists in
+     MEM (ALU result or `pc+4`; never load data, `exmem_wb_sel != WB_MEM`);
+  2. **MEM/WB** — the instruction two ahead (final writeback value: covers ALU
+     results, `pc+4`, and load data alike);
+  3. otherwise the ID/EX register value.
+  The forwarded operands feed the ALU, the branch comparator, the JALR target,
+  and the store data captured into EX/MEM.
+- **WB → ID bypass.** The register file is sync-write/comb-read, so a value
+  retiring this cycle is bypassed to a reader in ID. (The regfile itself is not
+  write-first: in the single-cycle core that would form a combinational loop
+  through its own writeback path — decision #013.)
+- **Load-use stall.** A load in EX whose `rd` matches a source of the
+  instruction in ID: PC and IF/ID hold for one cycle and a bubble enters EX.
+  One cycle later the consumer is in EX with the load in WB, and MEM/WB
+  forwarding supplies the value — the classic single-bubble load-use penalty.
+- **Control flush.** A redirect from EX (taken branch, `JAL`, `JALR`) squashes
+  the two younger wrong-path instructions (IF/ID and ID/EX become bubbles).
+  Taken-branch penalty: 2 cycles. Not-taken branches cost nothing. (Reducing
+  the taken penalty is the branch-prediction work at M5.)
 
-As a result the M2 core is correct only on **hazard-free code**. This is proven,
-not assumed: see `docs/verification.md`. The intentionally-hazardous
-`xfail_hazard_demo` diverges from the single-cycle reference (reference `0xc`,
-pipeline `0x0`), which is exactly the un-forwarded behaviour expected here.
+Stall and redirect cannot coincide (the stall condition requires a *load* in
+EX, and a load never redirects), which keeps the priority logic trivial.
 
-## What M3 adds
+## History: the M2 no-hazard baseline
 
-Forwarding (EX/MEM and MEM/WB → EX), a load-use stall, and branch flush, so the
-core becomes correct on arbitrary code and the delay slots and NOP-padding
-disappear. The single-cycle core remains the reference throughout.
+M2 built this same 5-stage structure with hazard handling deliberately absent,
+and *proved* the absence: `hazard_demo` (dense back-to-back RAW chains) diverged
+from the single-cycle reference — reference `0xc`, un-forwarded pipeline `0x0`.
+At M3 the same program matches at `0xc` on both cores. See
+`docs/verification.md` for the full evidence chain.

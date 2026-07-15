@@ -4,10 +4,11 @@ This file states **exactly** what is implemented in the RTL at any given time.
 It is the single source of truth for scope honesty — no claim of full-ISA or
 privileged-spec support is made anywhere in this repo beyond what this table shows.
 
-**As of milestone M1: the full RV32I base integer set is implemented** in a
-single-cycle datapath and verified by self-checking directed tests (see
-`docs/verification.md`). RV32M and the CSRs remain planned. A group is marked
-*implemented* only once it is built and passes its tests.
+**As of milestone M3: the full RV32I base integer set is implemented in both
+cores** — the single-cycle reference and the hazard-complete 5-stage pipeline —
+and verified as described in `docs/verification.md`. RV32M and the CSRs remain
+planned (M4). A group is marked *implemented* only once it is built and passes
+its tests.
 
 ## Base integer — RV32I
 

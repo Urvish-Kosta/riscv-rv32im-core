@@ -101,3 +101,20 @@ needing Spike in this environment. An intentionally-hazardous case asserts the
 *absence* of forwarding, so the test is meaningful and not vacuously passing.
 **Trade-off:** covers only hazard-free code at M2 — exactly this milestone's
 scope; Spike lockstep over arbitrary programs remains the M3 plan of record.
+
+### #013 — WB→ID bypass instead of a write-first regfile · Decided · M3
+**Choice:** keep the shared regfile sync-write/comb-read and add an explicit
+WB→ID bypass in the pipeline for the distance-3 case. **Why:** making the
+regfile itself write-first would forward the single-cycle core's writeback into
+its own same-cycle operand read — a combinational loop through ALU/load logic.
+An explicit bypass keeps both cores on one regfile and makes the hazard visible
+in the pipeline code where it belongs. **Trade-off:** two extra muxes in ID.
+
+### #014 — Classic single-bubble load-use stall (no MEM→EX load forwarding) · Decided · M3
+**Choice:** EX/MEM forwards only values already computed (ALU result, `pc+4`),
+never load data; a load-use pair stalls exactly one cycle and the value arrives
+via MEM/WB. **Why:** forwarding dmem's combinational read output straight into
+EX would chain memory-read + ALU into one cycle — the classic critical-path
+mistake; the single-bubble design is the standard answer and is what the
+interview question expects you to defend. **Trade-off:** 1-cycle penalty on
+load-use pairs, measured honestly by the perf counters at M5.

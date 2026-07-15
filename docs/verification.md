@@ -91,3 +91,33 @@ All hazard-free cases match bit-for-bit; the hazardous case diverges as required
 The programs are branch-free and insert three NOPs after every real instruction,
 which is the spacing a forwarding-free pipeline needs. M3 removes that constraint
 (forwarding + stalls + flush) and folds these programs into the general suite.
+
+---
+
+## M3 — full hazard logic, verified on hazardous code
+
+M3 adds forwarding, the load-use stall, and control flush; the pipeline is now
+correct on arbitrary RV32I code. The differential methodology is unchanged but
+the *programs* are now deliberately hazardous:
+
+```sh
+bash scripts/run_pipe_diff.sh   # builds both cores, runs everything below
+```
+
+| Evidence | What it shows |
+|---|---|
+| `hazard_demo` matches at hand-derived `0xc` | the exact program that **diverged** at M2 (`0x0` vs `0xc`) now agrees with the reference — before/after proof that forwarding works |
+| randomized **hazardous** programs (`--hazard`, committed seeds 11–18) | dense back-to-back RAW chains, immediate load-use consumption, stores of just-computed values: signatures bit-identical to the reference |
+| full M1 ISA suite **on the pipeline** (`make -C sw/tests run SIM=.../Vcore_pipe`) | every self-checking test (saturated with hazards and taken/not-taken branches) passes with the ISA-derived expected values |
+| M2 hazard-free set + seeds still pass | no regression on the easy cases |
+
+The hazardous generator (`tools/gen_pipe_test.py --hazard`) biases sources
+toward recent destinations (RAW chains), emits loads that are consumed on the
+very next instruction (load-use stall), and stores just-computed registers
+(store-data forwarding). Seeds are committed, so every run is reproducible.
+
+Spike lockstep + the official `riscv-tests` remain the documented plan of
+record; they were not runnable in the build environment used here (no Spike),
+and nothing above claims otherwise. The differential chain used instead is:
+ISA-derived values → single-cycle core → pipeline, with the ISA suite also run
+directly on the pipeline.

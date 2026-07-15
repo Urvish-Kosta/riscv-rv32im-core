@@ -29,5 +29,5 @@ jobs:
         run: make -C sim/verilator both
       - name: Run RV32I self-checking test suite (single-cycle)
         run: make -C sw/tests run
-      - name: Pipeline differential vs single-cycle reference (M2)
+      - name: Pipeline differential + hazardous-random + ISA-on-pipeline (M3)
         run: bash scripts/run_pipe_diff.sh

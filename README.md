@@ -7,7 +7,7 @@ viewer for CPI/IPC analysis.
 
 [![CI](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-M2%205--stage%20pipeline-yellow)
+![Status](https://img.shields.io/badge/status-M3%20hazards%20%2B%20forwarding-yellow)
 
 > **Scope (honest, verbatim):** *Designed and verified entirely in simulation
 > (Verilator + Icarus). Not run on FPGA or silicon. All performance figures are
@@ -17,18 +17,20 @@ viewer for CPI/IPC analysis.
 
 ## Project status
 
-**Current milestone: M2 — 5-stage pipeline (no hazard logic yet).** The
-datapath is now pipelined into IF/ID/EX/MEM/WB (`rtl/core/core_pipe.sv`), with
-branches/jumps resolved in EX. This milestone deliberately has **no forwarding,
-stalls, or branch flush**, so it is correct only on hazard-free code; general
-correctness arrives at M3. The single-cycle core (`rtl/core/core_top.sv`)
-remains as the trusted **functional reference**.
+**Current milestone: M3 — full hazard handling.** The 5-stage pipeline
+(`rtl/core/core_pipe.sv`) now has data forwarding (EX/MEM and MEM/WB → EX, plus
+a WB→ID bypass), a single-bubble load-use stall, and control flush on taken
+branches/jumps — it is correct on **arbitrary RV32I code**, with no NOP padding
+and no delay slots. The single-cycle core (`rtl/core/core_top.sv`) remains the
+trusted **functional reference**.
 
-The pipeline is verified **differentially against that reference**: hazard-free
-directed programs plus randomized (seeded) programs all produce a bit-identical
-result signature on both cores, one directed case also matches a hand-derived
-signature, and an intentionally-hazardous case provably diverges (confirming the
-core is genuinely un-forwarded). All M1 self-checking tests still pass.
+Verification is differential and deliberately hazardous: the program that
+*provably diverged* on the un-forwarded M2 pipeline now matches the reference at
+its hand-derived value; randomized hazardous programs (RAW chains, load-use,
+store-data forwarding; committed seeds) are bit-identical on both cores; and the
+full self-checking ISA suite passes directly on the pipeline. Spike lockstep +
+official `riscv-tests` remain the documented plan of record (not run here —
+no Spike in the build environment; nothing claims otherwise).
 
 There are **no measured performance results yet.** CPI/IPC, misprediction rates,
 and stall breakdowns are produced only from committed, re-runnable scripts at
@@ -39,7 +41,7 @@ M5–M6, and this README will not state any such number before it has been measu
 | **M0** | Repo skeleton, toolchain install/verify, Spike hello, Verilator smoke, CI | **done** |
 | **M1** | Single-cycle RV32I (functional reference), self-checking directed tests | **done** |
 | **M2** | Pipeline the datapath (no hazard logic yet) | **done** |
-| M3 | Hazard detection + forwarding + control hazards; full RV32I `riscv-tests` | not started |
+| **M3** | Hazard detection + forwarding + control hazards (differential + hazardous-random verification) | **done** |
 | M4 | RV32M mul/div (multi-cycle) + minimal Zicsr counters | not started |
 | M5 | Branch prediction (bimodal → gshare) + perf counters + measured CPI | not started |
 | M6 | Trace viewer + benchmark suite (Dhrystone) + CPI report | not started |
@@ -59,7 +61,7 @@ the official `riscv-tests`.
 
 ```
 riscv-rv32im-core/
-├── rtl/            core RTL (core/, mem/, include/riscv_pkg.sv)   # M2: single-cycle + pipeline
+├── rtl/            core RTL (core/, mem/, include/riscv_pkg.sv)   # M3: reference + hazard-complete pipeline
 ├── sim/            Verilator harness (verilator/) + committed waves (waves/)
 ├── sw/             test programs (common/ linker+crt, tests/, benchmarks/)
 ├── tools/          Python trace viewer / trace-compare / perf report / plot
@@ -74,13 +76,16 @@ riscv-rv32im-core/
 ```sh
 # 1. Install + verify the simulation toolchain (Ubuntu/Debian; macOS notes inside)
 bash scripts/build_toolchain.sh        # or: bash scripts/build_toolchain.sh --check
+
 # 2a. Single-cycle core + RV32I self-checking suite
 make -C sim/verilator                 # builds obj_dir/Vcore_top
 make -C sw/tests run                  # assembles every test, runs it, reports pass/fail
 
-# 2b. Pipeline (M2): differential check vs the single-cycle reference
+# 2b. Pipeline (M3): differential check vs the single-cycle reference
 make -C sim/verilator pipe            # builds obj_dir_pipe/Vcore_pipe
-bash scripts/run_pipe_diff.sh          # directed + randomized hazard-free programs
+bash scripts/run_pipe_diff.sh          # directed + randomized HAZARDOUS programs
+                                      # + the ISA suite run on the pipeline
+
 # (or) run the staged smoke script, which self-skips any missing tool
 bash scripts/run_tests.sh
 ```
@@ -98,19 +103,25 @@ Python 3 + matplotlib/pandas (trace/perf tooling, from M5).
 
 ## Verification approach
 
-The primary correctness argument is **lockstep trace-comparison against Spike**:
-every program runs on both the RTL core and Spike, and retire traces are diffed
-instruction-by-instruction — a divergence is a bug localized to the exact
-instruction. `riscv-tests` provides per-instruction unit tests (CI subset), and
-committed `.gtkw` waveforms provide visual evidence for each hazard class. The
-M0 `hello` already exercises the HTIF `tohost` exit protocol these tests rely on.
+**Current state (M3):** a two-link differential chain, with every link
+independently anchored:
 
-**Current state (M1):** the single-cycle core is verified with self-checking
-directed tests — an independent oracle, since expected values are derived from
-the ISA rather than the core. Spike lockstep and the official `riscv-tests` are
-the plan of record and land at **M3**, where a pipelined datapath genuinely
-needs an instruction-by-instruction reference. Nothing here claims Spike results
-that have not been produced.
+1. The **single-cycle core** is verified by self-checking directed tests whose
+   expected values are derived by hand from the ISA — an oracle independent of
+   any core.
+2. The **pipeline** is verified against that reference: directed + randomized
+   *hazardous* programs (committed seeds) must produce bit-identical `tohost`
+   signatures on both cores, and the full self-checking ISA suite also runs
+   directly on the pipeline. The M2→M3 before/after is explicit: the hazardous
+   program that provably diverged on the un-forwarded pipeline now matches at
+   its hand-derived value.
+
+**Plan of record (not yet run):** lockstep trace-comparison against **Spike**
+and the official **`riscv-tests`** — a divergence localizes a bug to the exact
+instruction. Spike was not available in the build environment used so far, and
+no Spike result is claimed anywhere; the `tohost` protocol these tests already
+use is the same one Spike/`riscv-tests` rely on, so wiring them in is additive.
+Committed `.gtkw` waveforms for each hazard class arrive with the M5–M6 tooling.
 
 ## Limitations
 

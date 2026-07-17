@@ -21,14 +21,14 @@ RTL_COMMON := ../../rtl/include/riscv_pkg.sv \
               ../../rtl/mem/dmem.sv
 
 RTL_CORE := $(RTL_COMMON) ../../rtl/core/core_top.sv
-RTL_PIPE := $(RTL_COMMON) ../../rtl/core/core_pipe.sv
+RTL_PIPE := $(RTL_COMMON) ../../rtl/core/mdu.sv ../../rtl/core/core_pipe.sv
 
 VFLAGS := --cc --exe --build -j 0 --trace -Wall -I../../rtl/include
 
 CORE := obj_dir/Vcore_top
 PIPE := obj_dir_pipe/Vcore_pipe
 
-.PHONY: default pipe both run runp clean
+.PHONY: default pipe both run runp mdu_tb clean
 default: $(CORE)
 pipe:    $(PIPE)
 both:    $(CORE) $(PIPE)
@@ -49,5 +49,13 @@ runp: $(PIPE)
 	@test -n "$(HEX)" || { echo "usage: make runp HEX=<image.hex>"; exit 2; }
 	$(PIPE) +hex=$(HEX) +max_cycles=$(MAXCYC)
 
+mdu_tb:
+	$(VERILATOR) --binary --timing -j 0 -Wall -Wno-DECLFILENAME \
+	    -Wno-UNUSEDPARAM \
+	    -I../../rtl/include --top-module tb_mdu --Mdir obj_dir_mdu \
+	    ../../rtl/include/riscv_pkg.sv ../../rtl/core/mdu.sv tb_mdu.sv \
+	    -o Vtb_mdu
+	./obj_dir_mdu/Vtb_mdu
+
 clean:
-	rm -rf obj_dir obj_dir_pipe wave.vcd
+	rm -rf obj_dir obj_dir_pipe obj_dir_mdu wave.vcd

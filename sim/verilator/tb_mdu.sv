@@ -20,7 +20,9 @@ module tb_mdu import riscv_pkg::*;;
 
     mdu dut (.*);
 
+    /* verilator lint_off BLKSEQ */
     always #5 clk = ~clk;
+    /* verilator lint_on BLKSEQ */
 
     int n_pass = 0, n_fail = 0;
 

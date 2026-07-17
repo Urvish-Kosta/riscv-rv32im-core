@@ -7,7 +7,7 @@ viewer for CPI/IPC analysis.
 
 [![CI](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-M3%20hazards%20%2B%20forwarding-yellow)
+![Status](https://img.shields.io/badge/status-M4%20RV32IM%20%2B%20counters-yellow)
 
 > **Scope (honest, verbatim):** *Designed and verified entirely in simulation
 > (Verilator + Icarus). Not run on FPGA or silicon. All performance figures are
@@ -17,20 +17,20 @@ viewer for CPI/IPC analysis.
 
 ## Project status
 
-**Current milestone: M3 — full hazard handling.** The 5-stage pipeline
-(`rtl/core/core_pipe.sv`) now has data forwarding (EX/MEM and MEM/WB → EX, plus
-a WB→ID bypass), a single-bubble load-use stall, and control flush on taken
-branches/jumps — it is correct on **arbitrary RV32I code**, with no NOP padding
-and no delay slots. The single-cycle core (`rtl/core/core_top.sv`) remains the
-trusted **functional reference**.
-
-Verification is differential and deliberately hazardous: the program that
-*provably diverged* on the un-forwarded M2 pipeline now matches the reference at
-its hand-derived value; randomized hazardous programs (RAW chains, load-use,
-store-data forwarding; committed seeds) are bit-identical on both cores; and the
-full self-checking ISA suite passes directly on the pipeline. Spike lockstep +
-official `riscv-tests` remain the documented plan of record (not run here —
-no Spike in the build environment; nothing claims otherwise).
+**Current milestone: M4 — RV32IM + counter CSRs.** Both cores now execute the
+full **RV32IM** set. The pipeline uses an iterative multi-cycle multiply/divide
+unit (`rtl/core/mdu.sv`, ~34 cycles, stalling the instruction in EX); the
+reference core computes M results behaviourally via `riscv_pkg::mdu_func` — a
+single executable encoding of the M-spec semantics (div-by-zero, `MIN_INT/-1`,
+MULH sign cases) that the iterative RTL is proven against, first exhaustively on
+edge operands in a standalone unit testbench (1012/1012), then at system level
+by the differential suite. A minimal read-only Zicsr slice provides
+`cycle`/`instret`(+h); the pipeline's `instret` counts only real retires — flush
+bubbles are excluded. Hazard handling (M3) is unchanged: forwarding, load-use
+stall, control flush; hazardous randomized programs now mix M ops into RAW
+chains and stalls, and everything remains bit-identical to the reference. Spike
+lockstep + official `riscv-tests` remain the documented plan of record (not run
+here — no Spike in the build environment; nothing claims otherwise).
 
 There are **no measured performance results yet.** CPI/IPC, misprediction rates,
 and stall breakdowns are produced only from committed, re-runnable scripts at
@@ -42,7 +42,7 @@ M5–M6, and this README will not state any such number before it has been measu
 | **M1** | Single-cycle RV32I (functional reference), self-checking directed tests | **done** |
 | **M2** | Pipeline the datapath (no hazard logic yet) | **done** |
 | **M3** | Hazard detection + forwarding + control hazards (differential + hazardous-random verification) | **done** |
-| M4 | RV32M mul/div (multi-cycle) + minimal Zicsr counters | not started |
+| **M4** | RV32M mul/div (multi-cycle) + minimal Zicsr counters | **done** |
 | M5 | Branch prediction (bimodal → gshare) + perf counters + measured CPI | not started |
 | M6 | Trace viewer + benchmark suite (Dhrystone) + CPI report | not started |
 | M7 | Documentation, embedded waveforms/plots, polish | not started |
@@ -81,7 +81,10 @@ bash scripts/build_toolchain.sh        # or: bash scripts/build_toolchain.sh --c
 make -C sim/verilator                 # builds obj_dir/Vcore_top
 make -C sw/tests run                  # assembles every test, runs it, reports pass/fail
 
-# 2b. Pipeline (M3): differential check vs the single-cycle reference
+# 2b. MDU unit test (iterative mul/div RTL vs behavioural spec function)
+make -C sim/verilator mdu_tb
+
+# 2c. Pipeline: differential check vs the single-cycle reference
 make -C sim/verilator pipe            # builds obj_dir_pipe/Vcore_pipe
 bash scripts/run_pipe_diff.sh          # directed + randomized HAZARDOUS programs
                                       # + the ISA suite run on the pipeline

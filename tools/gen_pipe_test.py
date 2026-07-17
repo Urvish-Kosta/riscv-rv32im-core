@@ -19,6 +19,7 @@ import random
 import sys
 
 R_OPS = ["add", "sub", "and", "or", "xor", "sll", "srl", "sra", "slt", "sltu"]
+M_OPS = ["mul", "mulh", "mulhsu", "mulhu", "div", "divu", "rem", "remu"]
 I_OPS = ["addi", "andi", "ori", "xori", "slti", "sltiu"]
 SHIFT_I = ["slli", "srli", "srai"]
 
@@ -63,7 +64,7 @@ def main() -> int:
             return rng.choice(recent[-3:])
         return rng.choice(POOL)
 
-    kinds = ["r", "i", "sh"] + (["ld", "st"] if hazard else [])
+    kinds = ["r", "i", "sh"] + (["ld", "st", "m"] if hazard else [])
     for _ in range(n_ops):
         kind = rng.choice(kinds)
         rd = rng.choice(POOL)
@@ -76,6 +77,9 @@ def main() -> int:
         elif kind == "sh":
             op, a, sh = rng.choice(SHIFT_I), pick_src(rng), rng.randint(0, 31)
             L.append(f"    {op} {rd}, {a}, {sh}{pad}")
+        elif kind == "m":
+            op, a, b2 = rng.choice(M_OPS), pick_src(rng), pick_src(rng)
+            L.append(f"    {op} {rd}, {a}, {b2}{pad}")
         elif kind == "st":
             src, off = pick_src(rng), 4 * rng.randint(0, 7)
             L.append(f"    sw {src}, {off}(s2)")

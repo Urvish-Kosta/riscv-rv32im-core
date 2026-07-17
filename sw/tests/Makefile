@@ -20,7 +20,7 @@ else
 endif
 
 COMMON  := ../common
-CFLAGS  := -march=rv32im -mabi=ilp32 -mno-relax -nostdlib -nostartfiles \
+CFLAGS  := -march=rv32im_zicsr -mabi=ilp32 -mno-relax -nostdlib -nostartfiles \
            -ffreestanding -I$(COMMON) -Wl,-T,$(COMMON)/link.ld
 SIM     ?= ../../sim/verilator/obj_dir/Vcore_top
 BIN2HEX := ../../tools/bin2hex.py

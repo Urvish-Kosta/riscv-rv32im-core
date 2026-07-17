@@ -68,16 +68,20 @@ module core_pipe import riscv_pkg::*; (
     // IF/ID
     logic [XLEN-1:0] ifid_pc;
     logic [31:0]     ifid_instr;
+    logic            ifid_valid;   // real instruction (not a bubble): instret
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ifid_pc    <= RESET_PC;
             ifid_instr <= 32'h0000_0013;   // NOP bubble
+            ifid_valid <= 1'b0;
         end else if (redirect) begin       // flush the wrong-path fetch
             ifid_pc    <= RESET_PC;
             ifid_instr <= 32'h0000_0013;
-        end else if (!stall) begin         // hold on a load-use stall
+            ifid_valid <= 1'b0;
+        end else if (!stall) begin         // hold on a stall
             ifid_pc    <= pc_if;
             ifid_instr <= instr_if;
+            ifid_valid <= 1'b1;
         end
     end
 
@@ -94,7 +98,7 @@ module core_pipe import riscv_pkg::*; (
     assign id_rd     = ifid_instr[11:7];
 
     logic       id_reg_write, id_alu_src_imm, id_alu_a_pc, id_mem_write;
-    logic       id_is_branch, id_is_jal, id_is_jalr;
+    logic       id_is_branch, id_is_jal, id_is_jalr, id_is_mdu, id_is_csr;
     alu_op_e    id_alu_op;
     imm_sel_e   id_imm_sel;
     wb_sel_e    id_wb_sel;
@@ -103,7 +107,8 @@ module core_pipe import riscv_pkg::*; (
         .opcode(id_opcode), .funct3(id_funct3), .funct7(id_funct7),
         .reg_write(id_reg_write), .alu_src_imm(id_alu_src_imm), .alu_a_pc(id_alu_a_pc),
         .alu_op(id_alu_op), .imm_sel(id_imm_sel), .mem_write(id_mem_write),
-        .wb_sel(id_wb_sel), .is_branch(id_is_branch), .is_jal(id_is_jal), .is_jalr(id_is_jalr)
+        .wb_sel(id_wb_sel), .is_branch(id_is_branch), .is_jal(id_is_jal), .is_jalr(id_is_jalr),
+        .is_mdu(id_is_mdu), .is_csr(id_is_csr)
     );
 
     logic [XLEN-1:0] id_rs1d_raw, id_rs2d_raw, id_rs1d, id_rs2d;
@@ -125,6 +130,8 @@ module core_pipe import riscv_pkg::*; (
     logic [XLEN-1:0] idex_pc, idex_rs1d, idex_rs2d, idex_imm;
     logic [4:0]      idex_rs1, idex_rs2;
     logic [4:0]      idex_rd;
+    logic            idex_valid, idex_is_mdu, idex_is_csr;
+    logic [11:0]     idex_csr_addr;
     logic [2:0]      idex_funct3;
     logic [31:0]     idex_instr;
     logic            idex_reg_write, idex_alu_src_imm, idex_alu_a_pc, idex_mem_write;
@@ -133,10 +140,12 @@ module core_pipe import riscv_pkg::*; (
     wb_sel_e         idex_wb_sel;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n || redirect || stall) begin
+        if (!rst_n || redirect || load_use_stall) begin
             // Bubble: on reset, on a control flush (squash the wrong-path
             // instruction in ID), or on a load-use stall (insert the bubble
             // that separates load and consumer).
+            // NOTE: an MDU stall does NOT bubble ID/EX -- the M instruction
+            // must stay in EX; that case holds the register instead (below).
             idex_reg_write <= 1'b0; idex_mem_write <= 1'b0;
             idex_is_branch <= 1'b0; idex_is_jal <= 1'b0; idex_is_jalr <= 1'b0;
             idex_alu_src_imm <= 1'b0; idex_alu_a_pc <= 1'b0;
@@ -144,7 +153,9 @@ module core_pipe import riscv_pkg::*; (
             idex_pc <= RESET_PC; idex_rs1d <= '0; idex_rs2d <= '0; idex_imm <= '0;
             idex_rs1 <= 5'd0; idex_rs2 <= 5'd0;
             idex_rd <= 5'd0; idex_funct3 <= 3'd0; idex_instr <= 32'h0000_0013;
-        end else begin
+            idex_valid <= 1'b0; idex_is_mdu <= 1'b0; idex_is_csr <= 1'b0;
+            idex_csr_addr <= 12'd0;
+        end else if (!mdu_stall) begin
             idex_reg_write <= id_reg_write; idex_mem_write <= id_mem_write;
             idex_is_branch <= id_is_branch; idex_is_jal <= id_is_jal; idex_is_jalr <= id_is_jalr;
             idex_alu_src_imm <= id_alu_src_imm; idex_alu_a_pc <= id_alu_a_pc;
@@ -152,6 +163,8 @@ module core_pipe import riscv_pkg::*; (
             idex_pc <= ifid_pc; idex_rs1d <= id_rs1d; idex_rs2d <= id_rs2d; idex_imm <= id_imm;
             idex_rs1 <= id_rs1; idex_rs2 <= id_rs2;
             idex_rd <= id_rd; idex_funct3 <= id_funct3; idex_instr <= ifid_instr;
+            idex_valid <= ifid_valid; idex_is_mdu <= id_is_mdu; idex_is_csr <= id_is_csr;
+            idex_csr_addr <= ifid_instr[31:20];
         end
     end
 
@@ -179,12 +192,34 @@ module core_pipe import riscv_pkg::*; (
         end
     end
 
-    logic [XLEN-1:0] ex_alu_a, ex_alu_b, ex_alu_y, ex_pc4;
+    logic [XLEN-1:0] ex_alu_a, ex_alu_b, ex_alu_y, ex_pc4, ex_result;
     assign ex_alu_a = idex_alu_a_pc    ? idex_pc  : ex_rs1_fwd;
     assign ex_alu_b = idex_alu_src_imm ? idex_imm : ex_rs2_fwd;
     assign ex_pc4   = idex_pc + 32'd4;
 
     alu u_alu (.op(idex_alu_op), .a(ex_alu_a), .b(ex_alu_b), .y(ex_alu_y));
+
+    // ---- RV32M: iterative unit, stalls the instruction in EX until done ----
+    logic        mdu_busy, mdu_done, mdu_start;
+    logic [31:0] mdu_result;
+    assign mdu_start = idex_is_mdu && !mdu_busy && !mdu_done;
+    mdu u_mdu (
+        .clk, .rst_n, .start(mdu_start), .op(mdu_op_e'(idex_funct3)),
+        .a(ex_rs1_fwd), .b(ex_rs2_fwd),
+        .busy(mdu_busy), .done(mdu_done), .result(mdu_result)
+    );
+    // The M instruction is held in EX (upstream stalled, bubbles injected into
+    // EX/MEM) until the unit reports done.
+    logic mdu_stall;
+    assign mdu_stall = idex_is_mdu && !mdu_done;
+
+    // ---- Zicsr: counter CSR read in EX ----
+    logic [XLEN-1:0] csr_rdata;   // driven in the CSR section below
+
+    // EX result: ALU, M unit, or CSR read.
+    assign ex_result = idex_is_mdu ? mdu_result
+                     : idex_is_csr ? csr_rdata
+                     :               ex_alu_y;
 
     logic ex_eq, ex_lts, ex_ltu, ex_branch_taken;
     assign ex_eq  = (ex_rs1_fwd == ex_rs2_fwd);
@@ -220,6 +255,7 @@ module core_pipe import riscv_pkg::*; (
 
     // EX/MEM
     logic [XLEN-1:0] exmem_alu_y, exmem_rs2d, exmem_pc4, exmem_pc;
+    logic            exmem_valid;
     logic [4:0]      exmem_rd;
     logic [2:0]      exmem_funct3;
     logic [31:0]     exmem_instr;
@@ -227,16 +263,18 @@ module core_pipe import riscv_pkg::*; (
     wb_sel_e         exmem_wb_sel;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
+        if (!rst_n || mdu_stall) begin
             exmem_reg_write <= 1'b0; exmem_mem_write <= 1'b0; exmem_wb_sel <= WB_ALU;
             exmem_alu_y <= '0; exmem_rs2d <= '0; exmem_pc4 <= '0; exmem_pc <= RESET_PC;
             exmem_rd <= 5'd0; exmem_funct3 <= 3'd0; exmem_instr <= 32'h0000_0013;
+            exmem_valid <= 1'b0;
         end else begin
             exmem_reg_write <= idex_reg_write; exmem_mem_write <= idex_mem_write;
             exmem_wb_sel <= idex_wb_sel;
-            exmem_alu_y <= ex_alu_y; exmem_rs2d <= ex_rs2_fwd; exmem_pc4 <= ex_pc4;
+            exmem_alu_y <= ex_result; exmem_rs2d <= ex_rs2_fwd; exmem_pc4 <= ex_pc4;
             exmem_pc <= idex_pc; exmem_rd <= idex_rd; exmem_funct3 <= idex_funct3;
             exmem_instr <= idex_instr;
+            exmem_valid <= idex_valid;
         end
     end
 
@@ -280,26 +318,55 @@ module core_pipe import riscv_pkg::*; (
     logic [XLEN-1:0] memwb_data, memwb_pc;
     logic [4:0]      memwb_rd;
     logic [31:0]     memwb_instr;
-    logic            memwb_reg_write;
+    logic            memwb_reg_write, memwb_valid;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             memwb_reg_write <= 1'b0; memwb_data <= '0; memwb_rd <= 5'd0;
             memwb_pc <= RESET_PC; memwb_instr <= 32'h0000_0013;
+            memwb_valid <= 1'b0;
         end else begin
             memwb_reg_write <= exmem_reg_write; memwb_data <= mem_wb_data;
             memwb_rd <= exmem_rd; memwb_pc <= exmem_pc; memwb_instr <= exmem_instr;
+            memwb_valid <= exmem_valid;
         end
     end
 
-    // ================================================== hazard detection (M3)
+    // ============================================ hazard detection (M3/M4)
     // Load-use: a load in EX whose destination is a source of the instruction
     // in ID. Stall IF/PC one cycle and inject a bubble into EX; the consumer
     // then picks the loaded value up via the MEM/WB forwarding path.
-    logic idex_is_load;
+    logic idex_is_load, load_use_stall;
     assign idex_is_load = (idex_wb_sel == WB_MEM) && idex_reg_write;
-    assign stall = idex_is_load && (idex_rd != 5'd0) &&
-                   ((idex_rd == id_rs1) || (idex_rd == id_rs2));
+    assign load_use_stall = idex_is_load && (idex_rd != 5'd0) &&
+                            ((idex_rd == id_rs1) || (idex_rd == id_rs2));
+    // M4: a multi-cycle M op also stalls the front end while it iterates.
+    assign stall = load_use_stall || mdu_stall;
+
+    // ==================================================== counter CSRs (M4)
+    // cycle: every clock. instret: one per *valid* instruction reaching WB
+    // (bubbles from flushes/stalls do not count). A CSR read in EX observes
+    // the counters as of that cycle; reads are not serialized against
+    // still-in-flight older instructions (documented scope limit).
+    logic [63:0] csr_cycle, csr_instret;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            csr_cycle   <= 64'd0;
+            csr_instret <= 64'd0;
+        end else begin
+            csr_cycle   <= csr_cycle + 64'd1;
+            if (memwb_valid) csr_instret <= csr_instret + 64'd1;
+        end
+    end
+    always_comb begin
+        unique case (idex_csr_addr)
+            CSR_CYCLE:    csr_rdata = csr_cycle[31:0];
+            CSR_CYCLEH:   csr_rdata = csr_cycle[63:32];
+            CSR_INSTRET:  csr_rdata = csr_instret[31:0];
+            CSR_INSTRETH: csr_rdata = csr_instret[63:32];
+            default:      csr_rdata = 32'd0;
+        endcase
+    end
 
     // ========================================================= WB
     assign wb_reg_write = memwb_reg_write;

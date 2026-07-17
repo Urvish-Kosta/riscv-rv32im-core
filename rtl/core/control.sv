@@ -7,9 +7,7 @@
 module control import riscv_pkg::*; (
     input  logic [6:0]  opcode,
     input  logic [2:0]  funct3,
-    /* verilator lint_off UNUSED */
-    input  logic [6:0]  funct7,   // only funct7[5] used (SUB/SRA)
-    /* verilator lint_on UNUSED */
+    input  logic [6:0]  funct7,
     output logic        reg_write,
     output logic        alu_src_imm,  // 1: ALU B = immediate, 0: ALU B = rs2
     output logic        alu_a_pc,     // 1: ALU A = PC (AUIPC), 0: ALU A = rs1
@@ -19,7 +17,9 @@ module control import riscv_pkg::*; (
     output wb_sel_e     wb_sel,
     output logic        is_branch,
     output logic        is_jal,
-    output logic        is_jalr
+    output logic        is_jalr,
+    output logic        is_mdu,      // RV32M op (funct7 == 0000001, OP_REG)
+    output logic        is_csr       // Zicsr read (counters; writes ignored)
 );
     // ALU op for OP_REG / OP_IMM from funct3 (+ funct7[5] for SUB/SRA).
     function automatic alu_op_e arith_alu_op(input logic is_reg);
@@ -48,11 +48,14 @@ module control import riscv_pkg::*; (
         is_branch   = 1'b0;
         is_jal      = 1'b0;
         is_jalr     = 1'b0;
+        is_mdu      = 1'b0;
+        is_csr      = 1'b0;
 
         unique case (opcode)
             OP_REG: begin
                 reg_write = 1'b1;
-                alu_op    = arith_alu_op(1'b1);
+                if (funct7 == F7_MULDIV) is_mdu = 1'b1;   // funct3 selects the M op
+                else                     alu_op = arith_alu_op(1'b1);
             end
             OP_IMM: begin
                 reg_write   = 1'b1;
@@ -102,8 +105,19 @@ module control import riscv_pkg::*; (
                 wb_sel    = WB_PC4;
                 is_jalr   = 1'b1;
             end
-            OP_FENCE, OP_SYSTEM: begin
-                // Treated as NOP at M1 (no CSRs/ordering effects modelled yet).
+            OP_FENCE: begin
+                // NOP: single hart, no caches -- ordering is trivially satisfied.
+            end
+            OP_SYSTEM: begin
+                if (funct3 != 3'b000) begin
+                    // CSRRW/CSRRS/CSRRC (+ immediate forms): implemented as
+                    // CSR *reads* of the counter CSRs (cycle/instret/+h).
+                    // Write side-effects are ignored -- all implemented CSRs
+                    // are read-only counters; unknown CSRs read as 0.
+                    is_csr    = 1'b1;
+                    reg_write = 1'b1;
+                end
+                // funct3 == 000 (ECALL/EBREAK): NOP at this milestone.
             end
             default: begin
                 // Illegal / unimplemented -> NOP.

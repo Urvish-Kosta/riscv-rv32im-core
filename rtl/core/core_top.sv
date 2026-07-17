@@ -46,7 +46,7 @@ module core_top import riscv_pkg::*; (
     assign rd     = instr[11:7];
 
     logic       reg_write, alu_src_imm, alu_a_pc, mem_write;
-    logic       is_branch, is_jal, is_jalr;
+    logic       is_branch, is_jal, is_jalr, is_mdu, is_csr;
     alu_op_e    alu_op;
     imm_sel_e   imm_sel;
     wb_sel_e    wb_sel;
@@ -54,7 +54,7 @@ module core_top import riscv_pkg::*; (
     control u_ctrl (
         .opcode, .funct3, .funct7,
         .reg_write, .alu_src_imm, .alu_a_pc, .alu_op, .imm_sel,
-        .mem_write, .wb_sel, .is_branch, .is_jal, .is_jalr
+        .mem_write, .wb_sel, .is_branch, .is_jal, .is_jalr, .is_mdu, .is_csr
     );
 
     // ------------------------------------------------------------ registers
@@ -70,10 +70,18 @@ module core_top import riscv_pkg::*; (
     imm_gen u_immgen (.instr(instr), .sel(imm_sel), .imm(imm));
 
     // ------------------------------------------------------------------ ALU
-    logic [XLEN-1:0] alu_a, alu_b, alu_y;
+    logic [XLEN-1:0] alu_a, alu_b, alu_y, alu_y_raw;
     assign alu_a = alu_a_pc    ? pc  : rs1_data;
     assign alu_b = alu_src_imm ? imm : rs2_data;
-    alu u_alu (.op(alu_op), .a(alu_a), .b(alu_b), .y(alu_y));
+    alu u_alu (.op(alu_op), .a(alu_a), .b(alu_b), .y(alu_y_raw));
+
+    // RV32M: the reference core computes M results *behaviourally* in one
+    // cycle via riscv_pkg::mdu_func -- the executable spec the pipeline's
+    // iterative mdu.sv is checked against. Zicsr: counter CSR reads.
+    logic [XLEN-1:0] csr_rdata;
+    assign alu_y = is_mdu ? mdu_func(mdu_op_e'(funct3), rs1_data, rs2_data)
+                 : is_csr ? csr_rdata
+                 :          alu_y_raw;
 
     // ---------------------------------------------------------- branch unit
     logic eq, lt_s, lt_u, branch_taken;
@@ -137,6 +145,22 @@ module core_top import riscv_pkg::*; (
             WB_MEM:  wb_data = load_data;
             WB_PC4:  wb_data = pc_plus4;
             default: wb_data = alu_y;
+        endcase
+    end
+
+    // ------------------------------------------------------ counter CSRs
+    // Single-cycle core: exactly one instruction retires per cycle, so
+    // cycle == instret by construction.
+    logic [63:0] csr_cycle;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) csr_cycle <= 64'd0;
+        else        csr_cycle <= csr_cycle + 64'd1;
+    end
+    always_comb begin
+        unique case (instr[31:20])
+            CSR_CYCLE,  CSR_INSTRET:  csr_rdata = csr_cycle[31:0];
+            CSR_CYCLEH, CSR_INSTRETH: csr_rdata = csr_cycle[63:32];
+            default:                  csr_rdata = 32'd0;
         endcase
     end
 

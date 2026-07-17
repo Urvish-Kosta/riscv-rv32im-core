@@ -41,4 +41,62 @@ package riscv_pkg;
     // ---- Writeback source ----
     typedef enum logic [1:0] { WB_ALU, WB_MEM, WB_PC4 } wb_sel_e;
 
+    // ---- RV32M (funct3 when opcode==OP_REG and funct7==0000001) ----
+    localparam logic [6:0] F7_MULDIV = 7'b0000001;
+    typedef enum logic [2:0] {
+        MDU_MUL    = 3'b000,
+        MDU_MULH   = 3'b001,
+        MDU_MULHSU = 3'b010,
+        MDU_MULHU  = 3'b011,
+        MDU_DIV    = 3'b100,
+        MDU_DIVU   = 3'b101,
+        MDU_REM    = 3'b110,
+        MDU_REMU   = 3'b111
+    } mdu_op_e;
+
+    // Behavioural RV32M semantics (one place encodes the spec, including
+    // div-by-zero and signed-overflow results). Used combinationally by the
+    // single-cycle reference core; the pipeline's iterative mdu.sv must agree
+    // with it -- that agreement is exactly what the differential tests check.
+    function automatic logic [31:0] mdu_func(input mdu_op_e op,
+                                             input logic [31:0] a,
+                                             input logic [31:0] b);
+        logic signed [63:0] sa, sb, p;
+        /* verilator lint_off UNUSED */
+        logic        [63:0] ua, ub, up;   // only up[63:32] read (MULHU)
+        /* verilator lint_on UNUSED */
+        logic signed [31:0] q, r;
+        begin
+            sa = {{32{a[31]}}, a};  sb = {{32{b[31]}}, b};
+            ua = {32'b0, a};        ub = {32'b0, b};
+            unique case (op)
+                MDU_MUL:    begin p = sa * sb;              mdu_func = p[31:0];  end
+                MDU_MULH:   begin p = sa * sb;              mdu_func = p[63:32]; end
+                MDU_MULHSU: begin p = sa * $signed(ub);     mdu_func = p[63:32]; end
+                MDU_MULHU:  begin up = ua * ub;             mdu_func = up[63:32]; end
+                MDU_DIV: begin
+                    if (b == 32'd0)                        q = -32'sd1;
+                    else if (a == 32'h8000_0000 && b == 32'hFFFF_FFFF) q = 32'sh8000_0000;
+                    else                                   q = $signed(a) / $signed(b);
+                    mdu_func = q;
+                end
+                MDU_DIVU:   mdu_func = (b == 32'd0) ? 32'hFFFF_FFFF : (a / b);
+                MDU_REM: begin
+                    if (b == 32'd0)                        r = $signed(a);
+                    else if (a == 32'h8000_0000 && b == 32'hFFFF_FFFF) r = 32'sd0;
+                    else                                   r = $signed(a) % $signed(b);
+                    mdu_func = r;
+                end
+                MDU_REMU:   mdu_func = (b == 32'd0) ? a : (a % b);
+                default:    mdu_func = 32'd0;
+            endcase
+        end
+    endfunction
+
+    // ---- Minimal Zicsr: read-only counter CSRs ----
+    localparam logic [11:0] CSR_CYCLE    = 12'hC00;
+    localparam logic [11:0] CSR_INSTRET  = 12'hC02;
+    localparam logic [11:0] CSR_CYCLEH   = 12'hC80;
+    localparam logic [11:0] CSR_INSTRETH = 12'hC82;
+
 endpackage : riscv_pkg

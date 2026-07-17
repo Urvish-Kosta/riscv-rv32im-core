@@ -27,6 +27,8 @@ jobs:
           sudo apt-get install -y verilator clang lld llvm python3
       - name: Build both cores (single-cycle + pipeline)
         run: make -C sim/verilator both
+      - name: MDU unit testbench (iterative RTL vs behavioural spec)
+        run: make -C sim/verilator mdu_tb
       - name: Run RV32I self-checking test suite (single-cycle)
         run: make -C sw/tests run
       - name: Pipeline differential + hazardous-random + ISA-on-pipeline (M3)

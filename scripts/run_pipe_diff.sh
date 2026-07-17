@@ -25,7 +25,7 @@ if [[ -n "$RISCV_PREFIX" ]]; then
 else
   CC="clang --target=riscv32-unknown-elf -fuse-ld=lld"; OBJCOPY="llvm-objcopy"
 fi
-CFLAGS="-march=rv32im -mabi=ilp32 -mno-relax -nostdlib -nostartfiles -ffreestanding -Isw/tests/pipe -Wl,-T,sw/common/link.ld"
+CFLAGS="-march=rv32im_zicsr -mabi=ilp32 -mno-relax -nostdlib -nostartfiles -ffreestanding -Isw/tests/pipe -Wl,-T,sw/common/link.ld"
 
 echo "== building both cores =="
 make -C sim/verilator both >/dev/null

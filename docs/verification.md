@@ -121,3 +121,35 @@ record; they were not runnable in the build environment used here (no Spike),
 and nothing above claims otherwise. The differential chain used instead is:
 ISA-derived values → single-cycle core → pipeline, with the ISA suite also run
 directly on the pipeline.
+
+---
+
+## M4 — RV32M + counter CSRs
+
+Three layers of evidence, from unit to system:
+
+1. **MDU unit testbench** (`sim/verilator/tb_mdu.sv`, `make -C sim/verilator
+   mdu_tb`): the iterative multiply/divide RTL is compared against
+   `riscv_pkg::mdu_func` — the behavioural encoding of the RV32M spec — on all
+   8 ops × 64 edge-operand pairs (0, ±1, `0x80000000`, `0x7FFFFFFF`, …,
+   including every divide-by-zero and the `MIN_INT / -1` overflow) plus 500
+   seeded random vectors: **1012/1012**.
+2. **Differential, hazardous, with M ops**: the random generator now mixes
+   `mul/mulh*/div*/rem*` into its hazardous programs, so multi-cycle EX stalls
+   interact with RAW chains, load-use stalls, and stores. Pipeline signatures
+   remain bit-identical to the reference — which computes M results
+   *behaviourally* via the same `mdu_func`, so this simultaneously proves the
+   iterative RTL against the executable spec at system level.
+3. **Directed self-checking** (`test_mul`, `test_div`, `test_csr`): hand-derived
+   values for every M edge case, run on *both* cores; CSR monotonicity and
+   sanity checks.
+
+### A test bug worth recording
+
+The first `test_csr` asserted that two *adjacent* `rdinstret` reads always
+differ. The pipeline correctly refuses to count flush bubbles in `instret` —
+and in this test two bubbles from a taken branch were retiring exactly between
+the two reads, so both reads returned the same (correct) value. The single-cycle
+core, having no bubbles, masked the bad assumption. The fix places real
+instructions between the reads. Lesson kept here deliberately: implementation-
+dependent timing must not leak into architectural assertions.

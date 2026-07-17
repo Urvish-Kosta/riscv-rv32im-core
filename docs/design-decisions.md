@@ -118,3 +118,27 @@ EX would chain memory-read + ALU into one cycle — the classic critical-path
 mistake; the single-bubble design is the standard answer and is what the
 interview question expects you to defend. **Trade-off:** 1-cycle penalty on
 load-use pairs, measured honestly by the perf counters at M5.
+
+### #015 — Behavioural `mdu_func` as executable spec; iterative `mdu.sv` as implementation · Decided · M4
+**Choice:** encode RV32M semantics once as a package function; the reference
+core uses it combinationally, the pipeline implements an iterative 32-step
+unit (shift-add multiply with 33-bit carry-preserving sum; restoring divide
+with 33-bit partial remainder), and every differential test doubles as an
+RTL-vs-spec check. **Why:** one authoritative statement of the tricky semantics
+(div-by-zero, `MIN_INT/-1`, MULH sign handling) instead of two independently
+buggy copies; the standalone `tb_mdu` proves agreement exhaustively on edges.
+**Trade-off:** the reference core is deliberately non-synthesizable in its M
+path — acceptable, it is a simulation oracle.
+
+### #016 — M ops stall in EX; CSRs are read-only counters · Decided · M4
+**Choice:** a multi-cycle M op holds ID/EX and bubbles EX/MEM until `done`
+(~34 cycles), rather than adding an out-of-order completion path; Zicsr is
+implemented as reads of `cycle`/`instret`(+h) with write effects ignored and
+unknown CSRs reading 0; `instret` counts only *valid* retires (bubbles
+excluded). **Why:** stall-in-EX is the simplest scheme that keeps the hazard
+story unchanged (forwarding sees the M result exactly like an ALU result in
+EX/MEM); the CSR slice is the minimum that makes performance measurable at M5
+without pretending to a privileged implementation that does not exist.
+**Trade-off:** M-heavy code pays full latency serially (measured honestly by
+the M5 counters); CSR reads are not serialized against in-flight instructions
+(documented in `docs/isa-support.md`).

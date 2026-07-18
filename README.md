@@ -7,7 +7,7 @@ viewer for CPI/IPC analysis.
 
 [![CI](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-M4%20RV32IM%20%2B%20counters-yellow)
+![Status](https://img.shields.io/badge/status-M5%20branch%20prediction%20%2B%20measured%20CPI-yellow)
 
 > **Scope (honest, verbatim):** *Designed and verified entirely in simulation
 > (Verilator + Icarus). Not run on FPGA or silicon. All performance figures are
@@ -17,20 +17,23 @@ viewer for CPI/IPC analysis.
 
 ## Project status
 
-**Current milestone: M4 — RV32IM + counter CSRs.** Both cores now execute the
-full **RV32IM** set. The pipeline uses an iterative multi-cycle multiply/divide
-unit (`rtl/core/mdu.sv`, ~34 cycles, stalling the instruction in EX); the
-reference core computes M results behaviourally via `riscv_pkg::mdu_func` — a
-single executable encoding of the M-spec semantics (div-by-zero, `MIN_INT/-1`,
-MULH sign cases) that the iterative RTL is proven against, first exhaustively on
-edge operands in a standalone unit testbench (1012/1012), then at system level
-by the differential suite. A minimal read-only Zicsr slice provides
-`cycle`/`instret`(+h); the pipeline's `instret` counts only real retires — flush
-bubbles are excluded. Hazard handling (M3) is unchanged: forwarding, load-use
-stall, control flush; hazardous randomized programs now mix M ops into RAW
-chains and stalls, and everything remains bit-identical to the reference. Spike
-lockstep + official `riscv-tests` remain the documented plan of record (not run
-here — no Spike in the build environment; nothing claims otherwise).
+**Current milestone: M5 — branch prediction + measured performance.** The
+pipeline now predicts at fetch: a full-tag 64-entry BTB plus 256 2-bit counters,
+runtime-selectable between `off` / `bimodal` / `gshare` (`+bp=`). Resolution
+stays in EX with one uniform check — redirect iff actual next-PC ≠ predicted
+next-PC — so with prediction off the core provably reduces to the M3/M4 design
+(and CI checks exactly that). Six performance counters (load-use stalls, MDU
+stalls, redirects, branches/taken/mispredicts) are software-readable CSRs and
+are printed by the harness with measured CPI at every run's end.
+
+First **measured** results (from `bash scripts/run_benchmarks.sh`, reproducible):
+a counted loop runs at CPI 1.003 under bimodal (vs 1.666 unpredicted); a
+strictly alternating branch defeats bimodal (50.1% mispredicts) but gshare
+learns it (0.3%, CPI 1.003) — the textbook separation, measured on this RTL.
+Correctness is mode-independent: every differential program and the full ISA
+suite pass identically in all three predictor modes. Spike lockstep + official
+`riscv-tests` remain the documented plan of record (not run here — no Spike in
+the build environment; nothing claims otherwise).
 
 There are **no measured performance results yet.** CPI/IPC, misprediction rates,
 and stall breakdowns are produced only from committed, re-runnable scripts at
@@ -43,7 +46,7 @@ M5–M6, and this README will not state any such number before it has been measu
 | **M2** | Pipeline the datapath (no hazard logic yet) | **done** |
 | **M3** | Hazard detection + forwarding + control hazards (differential + hazardous-random verification) | **done** |
 | **M4** | RV32M mul/div (multi-cycle) + minimal Zicsr counters | **done** |
-| M5 | Branch prediction (bimodal → gshare) + perf counters + measured CPI | not started |
+| **M5** | Branch prediction (bimodal → gshare) + perf counters + measured CPI | **done** |
 | M6 | Trace viewer + benchmark suite (Dhrystone) + CPI report | not started |
 | M7 | Documentation, embedded waveforms/plots, polish | not started |
 
@@ -75,7 +78,7 @@ riscv-rv32im-core/
 
 ```sh
 # 1. Install + verify the simulation toolchain (Ubuntu/Debian; macOS notes inside)
-bash scripts/build_toolchain.sh        # or: bash scripts/build_toolchain.sh --check
+bash scripts/build_toolchain.sh          # or: bash scripts/build_toolchain.sh --check
 
 # 2a. Single-cycle core + RV32I self-checking suite
 make -C sim/verilator                 # builds obj_dir/Vcore_top
@@ -84,9 +87,12 @@ make -C sw/tests run                  # assembles every test, runs it, reports p
 # 2b. MDU unit test (iterative mul/div RTL vs behavioural spec function)
 make -C sim/verilator mdu_tb
 
-# 2c. Pipeline: differential check vs the single-cycle reference
+# 2c. Measured CPI / branch statistics (all predictor modes)
+bash scripts/run_benchmarks.sh
+
+# 2d. Pipeline: differential check vs the single-cycle reference
 make -C sim/verilator pipe            # builds obj_dir_pipe/Vcore_pipe
-bash scripts/run_pipe_diff.sh          # directed + randomized HAZARDOUS programs
+bash scripts/run_pipe_diff.sh            # directed + randomized HAZARDOUS programs
                                       # + the ISA suite run on the pipeline
 
 # (or) run the staged smoke script, which self-skips any missing tool

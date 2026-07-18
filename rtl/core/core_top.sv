@@ -160,6 +160,11 @@ module core_top import riscv_pkg::*; (
         unique case (instr[31:20])
             CSR_CYCLE,  CSR_INSTRET:  csr_rdata = csr_cycle[31:0];
             CSR_CYCLEH, CSR_INSTRETH: csr_rdata = csr_cycle[63:32];
+            // Pipeline-only perf counters: architecturally 0 here, stated
+            // explicitly so the reference core documents the difference.
+            CSR_PERF_LOADUSE, CSR_PERF_MDU, CSR_PERF_REDIRECT,
+            CSR_PERF_BR, CSR_PERF_BR_TK, CSR_PERF_BR_MP:
+                                      csr_rdata = 32'd0;
             default:                  csr_rdata = 32'd0;
         endcase
     end

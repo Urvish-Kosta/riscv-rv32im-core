@@ -28,6 +28,14 @@
 module core_pipe import riscv_pkg::*; (
     input  logic            clk,
     input  logic            rst_n,
+    input  logic [1:0]      cfg_bp_mode,   // 0 off, 1 bimodal, 2 gshare
+    output logic            dbg_retire,    // valid instruction retiring (WB)
+    output logic [31:0]     dbg_n_loaduse, // perf: load-use stall cycles
+    output logic [31:0]     dbg_n_mdu,     // perf: MDU stall cycles
+    output logic [31:0]     dbg_n_redirect,// perf: control redirects (all)
+    output logic [31:0]     dbg_n_br,      // perf: cond branches resolved
+    output logic [31:0]     dbg_n_br_tk,   // perf: cond branches taken
+    output logic [31:0]     dbg_n_br_mp,   // perf: cond branch mispredicts
     output logic [XLEN-1:0] dbg_pc,
     output logic [31:0]     dbg_instr,
     output logic            dbg_reg_we,
@@ -50,23 +58,32 @@ module core_pipe import riscv_pkg::*; (
     logic            stall;
 
     // ========================================================= IF
-    logic [XLEN-1:0] pc_if, pc_next, pc_plus4_if;
+    logic [XLEN-1:0] pc_if, pc_plus4_if, pred_npc_if;
     logic [31:0]     instr_if;
+    logic            bp_pred_taken;
+    logic [XLEN-1:0] bp_pred_target;
+    logic [7:0]      bp_pred_pidx;
 
     assign pc_plus4_if = pc_if + 32'd4;
-    assign pc_next     = redirect ? redirect_pc : pc_plus4_if;
+    // Predicted next PC for the instruction being fetched. With the predictor
+    // off this is always pc+4, which reproduces the M3/M4 static-not-taken
+    // behaviour exactly.
+    assign pred_npc_if = bp_pred_taken ? bp_pred_target : pc_plus4_if;
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)      pc_if <= RESET_PC;
-        else if (!stall) pc_if <= pc_next;   // hold PC on a load-use stall
-        // (stall and redirect are mutually exclusive: stall requires a load
-        //  in EX, and a load never redirects)
+        if (!rst_n)        pc_if <= RESET_PC;
+        else if (redirect) pc_if <= redirect_pc;  // mispredict recovery wins
+        else if (!stall)   pc_if <= pred_npc_if;  // follow the prediction
+        // else: hold (load-use or MDU stall; redirect is suppressed during an
+        // MDU stall and cannot occur for the load itself thanks to the
+        // full-tag BTB, but the priority above is written to be safe anyway)
     end
 
     imem u_imem (.addr(pc_if), .rdata(instr_if));
 
     // IF/ID
-    logic [XLEN-1:0] ifid_pc;
+    logic [XLEN-1:0] ifid_pc, ifid_pred_npc;
+    logic [7:0]      ifid_bp_pidx;
     logic [31:0]     ifid_instr;
     logic            ifid_valid;   // real instruction (not a bubble): instret
     always_ff @(posedge clk or negedge rst_n) begin
@@ -79,9 +96,11 @@ module core_pipe import riscv_pkg::*; (
             ifid_instr <= 32'h0000_0013;
             ifid_valid <= 1'b0;
         end else if (!stall) begin         // hold on a stall
-            ifid_pc    <= pc_if;
-            ifid_instr <= instr_if;
-            ifid_valid <= 1'b1;
+            ifid_pc       <= pc_if;
+            ifid_instr    <= instr_if;
+            ifid_valid    <= 1'b1;
+            ifid_pred_npc <= pred_npc_if;
+            ifid_bp_pidx  <= bp_pred_pidx;
         end
     end
 
@@ -132,6 +151,8 @@ module core_pipe import riscv_pkg::*; (
     logic [4:0]      idex_rd;
     logic            idex_valid, idex_is_mdu, idex_is_csr;
     logic [11:0]     idex_csr_addr;
+    logic [XLEN-1:0] idex_pred_npc;
+    logic [7:0]      idex_bp_pidx;
     logic [2:0]      idex_funct3;
     logic [31:0]     idex_instr;
     logic            idex_reg_write, idex_alu_src_imm, idex_alu_a_pc, idex_mem_write;
@@ -154,7 +175,7 @@ module core_pipe import riscv_pkg::*; (
             idex_rs1 <= 5'd0; idex_rs2 <= 5'd0;
             idex_rd <= 5'd0; idex_funct3 <= 3'd0; idex_instr <= 32'h0000_0013;
             idex_valid <= 1'b0; idex_is_mdu <= 1'b0; idex_is_csr <= 1'b0;
-            idex_csr_addr <= 12'd0;
+            idex_csr_addr <= 12'd0; idex_pred_npc <= RESET_PC;
         end else if (!mdu_stall) begin
             idex_reg_write <= id_reg_write; idex_mem_write <= id_mem_write;
             idex_is_branch <= id_is_branch; idex_is_jal <= id_is_jal; idex_is_jalr <= id_is_jalr;
@@ -165,6 +186,8 @@ module core_pipe import riscv_pkg::*; (
             idex_rd <= id_rd; idex_funct3 <= id_funct3; idex_instr <= ifid_instr;
             idex_valid <= ifid_valid; idex_is_mdu <= id_is_mdu; idex_is_csr <= id_is_csr;
             idex_csr_addr <= ifid_instr[31:20];
+            idex_pred_npc <= ifid_pred_npc;
+            idex_bp_pidx  <= ifid_bp_pidx;
         end
     end
 
@@ -241,17 +264,45 @@ module core_pipe import riscv_pkg::*; (
         end
     end
 
+    // Actual next PC of the instruction in EX -- for *every* instruction.
+    logic [XLEN-1:0] ex_actual_npc, ex_taken_target;
     always_comb begin
-        redirect    = 1'b0;
-        redirect_pc = '0;
-        if (idex_is_jal) begin
-            redirect = 1'b1; redirect_pc = idex_pc + idex_imm;
-        end else if (idex_is_jalr) begin
-            redirect = 1'b1; redirect_pc = (ex_rs1_fwd + idex_imm) & ~32'h1;
-        end else if (idex_is_branch && ex_branch_taken) begin
-            redirect = 1'b1; redirect_pc = idex_pc + idex_imm;
-        end
+        ex_taken_target = idex_pc + idex_imm;                    // JAL / branch
+        if (idex_is_jalr) ex_taken_target = (ex_rs1_fwd + idex_imm) & ~32'h1;
+        if (idex_is_jal || idex_is_jalr ||
+            (idex_is_branch && ex_branch_taken))
+            ex_actual_npc = ex_taken_target;
+        else
+            ex_actual_npc = ex_pc4;
     end
+
+    // Uniform mispredict check (M5): redirect iff the fetch stage followed a
+    // next-PC different from the one this instruction actually produces. With
+    // the predictor off, pred_npc is always pc+4 and this reduces exactly to
+    // the M3/M4 taken-branch redirect. Suppressed while an M instruction is
+    // iterating in EX: the redirect would otherwise re-fire every stall cycle,
+    // and ID/EX's bubble-on-redirect would destroy the in-flight M
+    // instruction. (With the full-tag BTB an M instruction can never
+    // mispredict; the guard enforces the invariant regardless.)
+    assign redirect    = idex_valid && !mdu_stall &&
+                         (ex_actual_npc != idex_pred_npc);
+    assign redirect_pc = ex_actual_npc;
+
+    // BPU training from resolved control instructions.
+    logic ex_is_ctrl;
+    assign ex_is_ctrl = idex_is_branch || idex_is_jal || idex_is_jalr;
+    bpu u_bpu (
+        .clk, .rst_n, .mode(cfg_bp_mode),
+        .pc_if(pc_if),
+        .pred_taken(bp_pred_taken), .pred_target(bp_pred_target),
+        .pred_pidx(bp_pred_pidx),
+        .up_valid(idex_valid && ex_is_ctrl && !mdu_stall),
+        .up_is_cond(idex_is_branch),
+        .up_pc(idex_pc),
+        .up_taken(idex_is_branch ? ex_branch_taken : 1'b1),
+        .up_target(ex_taken_target),
+        .up_pidx(idex_bp_pidx)
+    );
 
     // EX/MEM
     logic [XLEN-1:0] exmem_alu_y, exmem_rs2d, exmem_pc4, exmem_pc;
@@ -343,6 +394,38 @@ module core_pipe import riscv_pkg::*; (
     // M4: a multi-cycle M op also stalls the front end while it iterates.
     assign stall = load_use_stall || mdu_stall;
 
+    // ================================================= perf counters (M5)
+    // Event definitions:
+    //   loaduse / mdu : cycles lost to each stall kind
+    //   redirect      : control redirects (every flush; = mispredicted fetch)
+    //   br / br_tk    : conditional branches resolved / taken (counted once,
+    //                   on the cycle the instruction leaves EX)
+    //   br_mp         : conditional branches whose resolution redirected
+    logic [31:0] ctr_loaduse, ctr_mdu, ctr_redirect, ctr_br, ctr_br_tk, ctr_br_mp;
+    logic ex_adv;                       // EX instruction advances this cycle
+    assign ex_adv = idex_valid && !mdu_stall;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ctr_loaduse <= '0; ctr_mdu <= '0; ctr_redirect <= '0;
+            ctr_br <= '0; ctr_br_tk <= '0; ctr_br_mp <= '0;
+        end else begin
+            if (load_use_stall) ctr_loaduse <= ctr_loaduse + 1;
+            if (mdu_stall)      ctr_mdu     <= ctr_mdu + 1;
+            if (redirect)       ctr_redirect<= ctr_redirect + 1;
+            if (ex_adv && idex_is_branch) begin
+                ctr_br <= ctr_br + 1;
+                if (ex_branch_taken) ctr_br_tk <= ctr_br_tk + 1;
+                if (redirect)        ctr_br_mp <= ctr_br_mp + 1;
+            end
+        end
+    end
+    assign dbg_n_loaduse  = ctr_loaduse;
+    assign dbg_n_mdu      = ctr_mdu;
+    assign dbg_n_redirect = ctr_redirect;
+    assign dbg_n_br       = ctr_br;
+    assign dbg_n_br_tk    = ctr_br_tk;
+    assign dbg_n_br_mp    = ctr_br_mp;
+
     // ==================================================== counter CSRs (M4)
     // cycle: every clock. instret: one per *valid* instruction reaching WB
     // (bubbles from flushes/stalls do not count). A CSR read in EX observes
@@ -364,6 +447,13 @@ module core_pipe import riscv_pkg::*; (
             CSR_CYCLEH:   csr_rdata = csr_cycle[63:32];
             CSR_INSTRET:  csr_rdata = csr_instret[31:0];
             CSR_INSTRETH: csr_rdata = csr_instret[63:32];
+            // Non-standard perf counters (custom read-only CSR space).
+            CSR_PERF_LOADUSE:  csr_rdata = ctr_loaduse;
+            CSR_PERF_MDU:      csr_rdata = ctr_mdu;
+            CSR_PERF_REDIRECT: csr_rdata = ctr_redirect;
+            CSR_PERF_BR:       csr_rdata = ctr_br;
+            CSR_PERF_BR_TK:    csr_rdata = ctr_br_tk;
+            CSR_PERF_BR_MP:    csr_rdata = ctr_br_mp;
             default:      csr_rdata = 32'd0;
         endcase
     end
@@ -374,6 +464,7 @@ module core_pipe import riscv_pkg::*; (
     assign wb_data      = memwb_data;
 
     // ========================================================= debug/trace
+    assign dbg_retire     = memwb_valid;
     assign dbg_pc         = memwb_pc;
     assign dbg_instr      = memwb_instr;
     assign dbg_reg_we     = memwb_reg_write && (memwb_rd != 5'd0);

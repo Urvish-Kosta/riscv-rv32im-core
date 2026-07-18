@@ -142,3 +142,25 @@ without pretending to a privileged implementation that does not exist.
 **Trade-off:** M-heavy code pays full latency serially (measured honestly by
 the M5 counters); CSR reads are not serialized against in-flight instructions
 (documented in `docs/isa-support.md`).
+
+### #017 — Predict at IF with a full-tag BTB; one uniform mispredict check in EX · Decided · M5
+**Choice:** BTB (64 entries, full tag) + 2-bit PHT predict the next PC at
+fetch; every instruction carries its predicted next PC, and EX redirects iff
+the actual next PC differs. **Why:** the full tag makes false hits impossible,
+so prediction can never touch correctness; the single npc comparison replaces
+per-kind redirect logic, covers JAL/JALR/branches/aliases uniformly, and with
+the predictor off degenerates provably (`+bp=off` in CI) to the pre-M5 core.
+**Trade-off:** 64×~57 bits of BTB state; direct-mapped conflict misses accepted
+at this size.
+
+### #018 — Non-speculative GHR, but predict-time PHT index carried to update · Decided · M5
+**Choice:** the global history register updates at EX (resolved branches only,
+in order); each prediction's PHT index travels down the pipe so training hits
+exactly the counter that predicted. **Why:** speculative history with
+checkpoint/repair buys little on a 2-cycle-resolution scalar core; but index
+consistency is not optional — recomputing the index at update time trained the
+wrong counter whenever another branch resolved in between, and the measured
+symptom (gshare stuck at ~25% mispredicts on a strictly alternating branch,
+vs 0.3% after the fix) is documented in `docs/branch-prediction.md`.
+**Trade-off:** history is a few cycles stale at predict time; accepted and
+measured.

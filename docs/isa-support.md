@@ -36,7 +36,7 @@ only once it is built and passes its tests.
 |---|---|---|---|
 | `cycle` / `cycleh` (0xC00/0xC80) | cycle count, read-only | **implemented** | M4 |
 | `instret` / `instreth` (0xC02/0xC82) | retired instructions (pipeline: bubbles from stalls/flushes are *not* counted), read-only | **implemented** | M4 |
-| (non-standard) stall/mispredict counters | perf analysis | planned | M5 |
+| (non-standard) 0xFC0–0xFC5 | load-use/MDU stall cycles, redirects, branches/taken/mispredicts — read-only, pipeline core only (reference reads 0) | **implemented** | M5 |
 
 ## Explicitly **not** implemented (by design)
 

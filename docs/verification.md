@@ -101,7 +101,7 @@ correct on arbitrary RV32I code. The differential methodology is unchanged but
 the *programs* are now deliberately hazardous:
 
 ```sh
-bash scripts/run_pipe_diff.sh   # builds both cores, runs everything below
+bash scripts/run_pipe_diff.sh      # builds both cores, runs everything below
 ```
 
 | Evidence | What it shows |
@@ -153,3 +153,21 @@ the two reads, so both reads returned the same (correct) value. The single-cycle
 core, having no bubbles, masked the bad assumption. The fix places real
 instructions between the reads. Lesson kept here deliberately: implementation-
 dependent timing must not leak into architectural assertions.
+
+---
+
+## M5 — branch prediction + performance counters
+
+Correctness first: prediction must never change architectural results, only
+timing. The differential driver therefore runs **every** program on the
+pipeline in all three predictor modes (`off`, `bimodal`, `gshare`) and demands
+the signature match the reference in each — 16 differential programs × 3 modes,
+plus the full ISA suite per mode, plus `test_perfcsr` (pipeline-only: the
+counter CSRs move when their events occur). `+bp=off` doubles as a regression
+proof that the predictor datapath reduces exactly to the M3/M4 core.
+
+Performance second, measured only: `scripts/run_benchmarks.sh` runs
+self-checking kernels and prints observed cycles/retired/CPI and counter
+values; results and their interpretation live in `docs/branch-prediction.md`.
+The gshare index-consistency bug — found because a measured mispredict rate
+contradicted theory, then fixed and re-measured — is recorded there.

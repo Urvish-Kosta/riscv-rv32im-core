@@ -99,4 +99,13 @@ package riscv_pkg;
     localparam logic [11:0] CSR_CYCLEH   = 12'hC80;
     localparam logic [11:0] CSR_INSTRETH = 12'hC82;
 
+    // Non-standard performance counters (custom read-only CSR space, pipeline
+    // core only; the single-cycle reference reads them as 0).
+    localparam logic [11:0] CSR_PERF_LOADUSE  = 12'hFC0;
+    localparam logic [11:0] CSR_PERF_MDU      = 12'hFC1;
+    localparam logic [11:0] CSR_PERF_REDIRECT = 12'hFC2;
+    localparam logic [11:0] CSR_PERF_BR       = 12'hFC3;
+    localparam logic [11:0] CSR_PERF_BR_TK    = 12'hFC4;
+    localparam logic [11:0] CSR_PERF_BR_MP    = 12'hFC5;
+
 endpackage : riscv_pkg

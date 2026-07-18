@@ -35,17 +35,23 @@ PIPE=sim/verilator/obj_dir_pipe/Vcore_pipe
 B=sw/tests/pipe/build; mkdir -p "$B"
 declare -A EXPECT=( [pipe_smoke]="0x0000000a" [hazard_demo]="0x0000000c" )
 
-sig() { "$1" +hex="$2" +max_cycles=40000 2>&1 | grep -oE 'tohost=0x[0-9a-f]{8}' | cut -d= -f2; }
+sig() { # binary hex [extra-args]
+  "$1" +hex="$2" ${3:-} +max_cycles=40000 2>&1 | grep -oE 'tohost=0x[0-9a-f]{8}' | cut -d= -f2; }
 
 pass=0; fail=0
-check() { # name hexfile
+check() { # name hexfile  -- pipeline is checked in ALL predictor modes
   local name="$1" hex="$2"
-  local s_ref s_pipe exp ok=1
-  s_ref="$(sig "$CORE" "$hex")"; s_pipe="$(sig "$PIPE" "$hex")"
+  local s_ref s_p exp ok=1 mode
+  s_ref="$(sig "$CORE" "$hex")"
   exp="${EXPECT[$name]:-}"
-  printf "  %-14s ref=%s pipe=%s" "$name" "$s_ref" "$s_pipe"
-  [[ -n "$s_ref" && "$s_ref" == "$s_pipe" ]] || ok=0
-  if [[ -n "$exp" ]]; then printf " expect=%s" "$exp"; [[ "$s_pipe" == "$exp" ]] || ok=0; fi
+  printf "  %-14s ref=%s" "$name" "$s_ref"
+  [[ -n "$s_ref" ]] || ok=0
+  for mode in off bimodal gshare; do
+    s_p="$(sig "$PIPE" "$hex" "+bp=$mode")"
+    printf " %s=%s" "$mode" "$s_p"
+    [[ "$s_p" == "$s_ref" ]] || ok=0
+  done
+  if [[ -n "$exp" ]]; then printf " expect=%s" "$exp"; [[ "$s_ref" == "$exp" ]] || ok=0; fi
   if [[ $ok -eq 1 ]]; then echo "  PASS"; ((pass++)); else echo "  FAIL"; ((fail++)); fi
 }
 
@@ -74,12 +80,24 @@ for seed in 11 12 13 14 15 16 17 18; do
   check "hz_s${seed}" "$(build_S "$B/hz_s${seed}.S")"
 done
 
-echo "  -- M1 self-checking ISA suite on the PIPELINE --"
-if make -C sw/tests run SIM=../../sim/verilator/obj_dir_pipe/Vcore_pipe | sed 's/^/  /' | tail -3; then
-  ((pass++))
+echo "  -- pipeline-only directed (perf CSRs) --"
+$CC $CFLAGS -Isw/common sw/common/crt.S sw/tests/pipeonly/test_perfcsr.S -o "$B/perfcsr.elf"
+$OBJCOPY -O binary "$B/perfcsr.elf" "$B/perfcsr.bin"
+python3 tools/bin2hex.py "$B/perfcsr.bin" "$B/perfcsr.hex"
+if "$PIPE" +hex="$B/perfcsr.hex" +max_cycles=40000 >/dev/null 2>&1; then
+  echo "  test_perfcsr   PASS"; ((pass++))
 else
-  echo "  ISA-on-pipeline FAILED"; ((fail++))
+  echo "  test_perfcsr   FAIL"; ((fail++))
 fi
+
+for mode in off bimodal gshare; do
+  echo "  -- ISA suite on the PIPELINE (+bp=$mode) --"
+  if make -C sw/tests run SIM=../../sim/verilator/obj_dir_pipe/Vcore_pipe SIMFLAGS="+bp=$mode" | sed 's/^/  /' | tail -2 | head -1; then
+    ((pass++))
+  else
+    echo "  ISA-on-pipeline ($mode) FAILED"; ((fail++))
+  fi
+done
 
 echo "  ------------------------------------------"
 echo "  pipeline verification: passed=$pass failed=$fail"

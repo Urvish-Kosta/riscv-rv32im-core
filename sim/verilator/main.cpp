@@ -53,6 +53,18 @@ int main(int argc, char** argv) {
 
     const std::unique_ptr<Dut> dut{new Dut{ctx.get()}};
 
+#if defined(DUT_PIPE)
+    // Branch predictor mode: +bp=off|bimodal|gshare (default gshare).
+    {
+        const char* m  = ctx->commandArgsPlusMatch("bp");
+        const char* eq = std::strchr(m, '=');
+        const char* v  = eq ? eq + 1 : "gshare";
+        if      (!std::strcmp(v, "off"))     dut->cfg_bp_mode = 0;
+        else if (!std::strcmp(v, "bimodal")) dut->cfg_bp_mode = 1;
+        else                                 dut->cfg_bp_mode = 2;
+    }
+#endif
+
 #if VM_TRACE
     std::unique_ptr<VerilatedVcdC> tfp;
     if (trace_on) {
@@ -80,7 +92,7 @@ int main(int argc, char** argv) {
 
     int      exit_code = -1;
     uint32_t tohost_val = 0;
-    uint64_t cyc = 0;
+    uint64_t cyc = 0, retired = 0;
     for (; cyc < max_cycles; ++cyc) {
         half(0);   // low phase: combinational settled
 
@@ -96,6 +108,9 @@ int main(int argc, char** argv) {
             std::printf("\n");
         }
 
+#if defined(DUT_PIPE)
+        if (dut->dbg_retire) ++retired;
+#endif
         if (dut->dbg_dmem_we && dut->dbg_dmem_addr == TOHOST) {
             tohost_val = dut->dbg_dmem_wdata;
             exit_code  = (tohost_val == 1u) ? 0 : (int)(tohost_val >> 1);
@@ -117,5 +132,18 @@ int main(int argc, char** argv) {
     std::printf("[core] halted @cycle %llu  tohost=0x%08x  ->  %s (exit=%d)\n",
                 (unsigned long long)cyc, tohost_val,
                 exit_code == 0 ? "PASS" : "FAIL", exit_code);
+#if defined(DUT_PIPE)
+    // Measured performance report (pipeline only). Every number below is
+    // observed in this run -- nothing is estimated.
+    if (retired > 0)
+        std::printf("[perf] cycles=%llu retired=%llu cpi=%.3f "
+                    "stall_loaduse=%u stall_mdu=%u redirects=%u "
+                    "branches=%u taken=%u br_mispred=%u\n",
+                    (unsigned long long)cyc, (unsigned long long)retired,
+                    (double)cyc / (double)retired,
+                    (unsigned)dut->dbg_n_loaduse, (unsigned)dut->dbg_n_mdu,
+                    (unsigned)dut->dbg_n_redirect, (unsigned)dut->dbg_n_br,
+                    (unsigned)dut->dbg_n_br_tk, (unsigned)dut->dbg_n_br_mp);
+#endif
     return exit_code;
 }

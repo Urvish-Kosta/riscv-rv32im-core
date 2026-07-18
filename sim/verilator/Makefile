@@ -21,7 +21,7 @@ RTL_COMMON := ../../rtl/include/riscv_pkg.sv \
               ../../rtl/mem/dmem.sv
 
 RTL_CORE := $(RTL_COMMON) ../../rtl/core/core_top.sv
-RTL_PIPE := $(RTL_COMMON) ../../rtl/core/mdu.sv ../../rtl/core/core_pipe.sv
+RTL_PIPE := $(RTL_COMMON) ../../rtl/core/mdu.sv ../../rtl/core/bpu.sv ../../rtl/core/core_pipe.sv
 
 VFLAGS := --cc --exe --build -j 0 --trace -Wall -I../../rtl/include
 

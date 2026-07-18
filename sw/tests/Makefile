@@ -35,7 +35,7 @@ run: build
 	@pass=0; fail=0; \
 	for t in $(TESTS); do \
 	  printf "  %-16s " $$t; \
-	  if $(SIM) +hex=$(BUILD)/$$t.hex +max_cycles=$(MAXCYC) >$(BUILD)/$$t.log 2>&1; then \
+	  if $(SIM) +hex=$(BUILD)/$$t.hex $(SIMFLAGS) +max_cycles=$(MAXCYC) >$(BUILD)/$$t.log 2>&1; then \
 	    echo "PASS"; pass=$$((pass+1)); \
 	  else \
 	    echo "FAIL"; sed 's/^/      /' $(BUILD)/$$t.log | tail -2; fail=$$((fail+1)); \

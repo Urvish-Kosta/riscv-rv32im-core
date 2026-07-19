@@ -100,8 +100,10 @@ module bpu import riscv_pkg::*; (
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            for (int i = 0; i < BTB_ENTRIES; i++) btb[i] <= '0;
-            for (int i = 0; i < PHT_ENTRIES; i++) pht[i] <= 2'b01; // weak NT
+            /* verilator lint_off BLKSEQ */
+            for (int i = 0; i < BTB_ENTRIES; i++) btb[i] = '0;
+            for (int i = 0; i < PHT_ENTRIES; i++) pht[i] = 2'b01; // weak NT
+            /* verilator lint_on BLKSEQ */
             ghr <= '0;
         end else if (up_valid) begin
             // BTB: allocate/refresh (taken-target cached; harmless if the

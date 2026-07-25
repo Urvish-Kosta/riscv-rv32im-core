@@ -164,3 +164,24 @@ symptom (gshare stuck at ~25% mispredicts on a strictly alternating branch,
 vs 0.3% after the fix) is documented in `docs/branch-prediction.md`.
 **Trade-off:** history is a few cycles stale at predict time; accepted and
 measured.
+
+### #019 — Retire-trace lockstep against the single-cycle core · Decided · M6
+**Choice:** both cores emit an identical-format retire trace; a comparison tool
+diffs them instruction-by-instruction and localizes the first divergence.
+**Why:** end-of-run signatures prove *that* something differs, not *where*;
+lockstep turns a failing 100k-instruction benchmark into a single instruction
+to look at. It is also exactly the shape of Spike lockstep, so adopting Spike
+later is a change of golden model, not of methodology. **Trade-off:** the trace
+interface required retire-aligned store outputs and a defined trace end point
+(both were bugs first, see docs/verification.md); timing CSRs need explicit
+classification rather than bit-exact comparison.
+
+### #020 — Custom self-checking kernels instead of an approximated Dhrystone · Decided · M6
+**Choice:** ship eight kernels (three asm, five C) whose golden results are
+derived independently on the host, and publish **no** DMIPS figure; document
+exactly how to drop the real Dhrystone sources in later. **Why:** a
+from-memory reimplementation would not be Dhrystone, and a "DMIPS" number from
+it would be a fabricated figure wearing a standard benchmark's name — the one
+thing this project must not do. The kernels here are fully specified in-repo
+and independently checked. **Trade-off:** no industry-comparable score; the
+results say what they measure and nothing more.

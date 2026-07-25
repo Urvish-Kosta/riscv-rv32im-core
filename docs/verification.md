@@ -171,3 +171,39 @@ self-checking kernels and prints observed cycles/retired/CPI and counter
 values; results and their interpretation live in `docs/branch-prediction.md`.
 The gshare index-consistency bug — found because a measured mispredict rate
 contradicted theory, then fixed and re-measured — is recorded there.
+
+---
+
+## M6 — lockstep retire-trace comparison
+
+The strongest correctness evidence in the project so far. Both cores emit a
+retire trace (one record per committed instruction, identical format), and
+`tools/trace_compare.py` compares them record by record, localizing any first
+divergence to an exact instruction rather than reporting a single end-of-run
+signature mismatch. This is the Spike-lockstep *workflow*, with the verified
+single-cycle core as the golden model.
+
+```sh
+bash scripts/run_lockstep.sh
+```
+
+Current result: **18 programs, 332,134 retired instructions compared,
+0 divergences** — 10 self-checking ISA tests plus 8 benchmark kernels,
+five of which are compiled C (real compiler output: prologues, spills,
+recursion, byte/half memory traffic).
+
+Two implementation details had to be right for this to mean anything, and both
+were bugs found while building it:
+
+1. **Store records were attached to the wrong instruction** on the pipeline —
+   the data-memory write port is EX/MEM while the retire record is MEM/WB.
+   Fixed by exposing a retire-aligned store view from both cores.
+2. **Traces ended at different points**, because the pipeline halts when the
+   final store commits in MEM, one cycle before it retires. Fixed by ending the
+   trace when that store *retires*, with performance counters snapshotted at
+   the halt cycle so the drain cycles cannot inflate any measurement.
+
+Timing-dependent CSR reads (`cycle`, `instret`, perf counters) legitimately
+differ between the two implementations; the comparison classifies them, and
+values derived from them, as expected rather than as bugs — and `--strict`
+turns that off for anyone who wants to see them.

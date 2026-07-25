@@ -7,7 +7,7 @@ viewer for CPI/IPC analysis.
 
 [![CI](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Status](https://img.shields.io/badge/status-M5%20branch%20prediction%20%2B%20measured%20CPI-yellow)
+![Status](https://img.shields.io/badge/status-M6%20lockstep%20tracing%20%2B%20benchmarks-yellow)
 
 > **Scope (honest, verbatim):** *Designed and verified entirely in simulation
 > (Verilator + Icarus). Not run on FPGA or silicon. All performance figures are
@@ -17,23 +17,24 @@ viewer for CPI/IPC analysis.
 
 ## Project status
 
-**Current milestone: M5 — branch prediction + measured performance.** The
-pipeline now predicts at fetch: a full-tag 64-entry BTB plus 256 2-bit counters,
-runtime-selectable between `off` / `bimodal` / `gshare` (`+bp=`). Resolution
-stays in EX with one uniform check — redirect iff actual next-PC ≠ predicted
-next-PC — so with prediction off the core provably reduces to the M3/M4 design
-(and CI checks exactly that). Six performance counters (load-use stalls, MDU
-stalls, redirects, branches/taken/mispredicts) are software-readable CSRs and
-are printed by the harness with measured CPI at every run's end.
+**Current milestone: M6 — lockstep tracing, benchmarks, and reports.** Both
+cores now emit an identical-format **retire trace** (one record per committed
+instruction), and `tools/trace_compare.py` diffs them record-by-record,
+localizing any divergence to an exact instruction — the Spike-lockstep
+workflow, with the verified single-cycle core as the golden model. Current
+result: **18 programs, 332,134 retired instructions compared, 0 divergences**,
+including five compiled C kernels (real compiler output — prologues, spills,
+recursion, byte/half memory traffic).
 
-First **measured** results (from `bash scripts/run_benchmarks.sh`, reproducible):
-a counted loop runs at CPI 1.003 under bimodal (vs 1.666 unpredicted); a
-strictly alternating branch defeats bimodal (50.1% mispredicts) but gshare
-learns it (0.3%, CPI 1.003) — the textbook separation, measured on this RTL.
-Correctness is mode-independent: every differential program and the full ISA
-suite pass identically in all three predictor modes. Spike lockstep + official
-`riscv-tests` remain the documented plan of record (not run here — no Spike in
-the build environment; nothing claims otherwise).
+The benchmark suite grew to eight self-checking kernels whose golden values are
+derived independently on the host, and `tools/perf_report.py` /
+`tools/plot_cpi.py` generate the committed report and plots in
+[`docs/results/`](docs/results/). `tools/trace_viewer.py` annotates a trace with
+its per-instruction stall cost. **No Dhrystone/DMIPS figure is quoted** —
+Dhrystone is not in this repository, and `docs/benchmarks.md` explains why and
+how to add the real sources. Spike lockstep + official `riscv-tests` remain the
+documented plan of record (not run here — no Spike in the build environment;
+nothing claims otherwise).
 
 There are **no measured performance results yet.** CPI/IPC, misprediction rates,
 and stall breakdowns are produced only from committed, re-runnable scripts at
@@ -47,7 +48,7 @@ M5–M6, and this README will not state any such number before it has been measu
 | **M3** | Hazard detection + forwarding + control hazards (differential + hazardous-random verification) | **done** |
 | **M4** | RV32M mul/div (multi-cycle) + minimal Zicsr counters | **done** |
 | **M5** | Branch prediction (bimodal → gshare) + perf counters + measured CPI | **done** |
-| M6 | Trace viewer + benchmark suite (Dhrystone) + CPI report | not started |
+| **M6** | Trace viewer + lockstep compare + benchmark suite + CPI report | **done** (benchmarks are custom self-checking kernels; Dhrystone deliberately not approximated — see `docs/benchmarks.md`) |
 | M7 | Documentation, embedded waveforms/plots, polish | not started |
 
 ## Why this exists
@@ -64,13 +65,14 @@ the official `riscv-tests`.
 
 ```
 riscv-rv32im-core/
-├── rtl/            core RTL (core/, mem/, include/riscv_pkg.sv)   # M3: reference + hazard-complete pipeline
+├── rtl/            core RTL: reference core, pipelined core, mdu, bpu, memories
 ├── sim/            Verilator harness (verilator/) + committed waves (waves/)
-├── sw/             test programs (common/ linker+crt, tests/, benchmarks/)
-├── tools/          Python trace viewer / trace-compare / perf report / plot
+├── sw/             common/ (linker, crt, crt0), tests/ (ISA + pipeline), bench/ (8 kernels)
+├── tools/          rvdisasm, trace_viewer, trace_compare, perf_report, plot_cpi, generators
 ├── tests/          riscv-tests hooks + self-check infra (wired at M3)
 ├── scripts/        build_toolchain.sh, run_tests.sh, run_benchmarks.sh
-├── docs/           architecture, pipeline, hazards, prediction, counters, decisions
+├── docs/           architecture, pipeline, hazards, prediction, counters, tracing,
+│                  benchmarks, verification, decisions, results/ (measured output)
 └── .github/        CI workflow
 ```
 
@@ -90,7 +92,10 @@ make -C sim/verilator mdu_tb
 # 2c. Measured CPI / branch statistics (all predictor modes)
 bash scripts/run_benchmarks.sh
 
-# 2d. Pipeline: differential check vs the single-cycle reference
+# 2d. Lockstep: compare every retired instruction against the reference core
+bash scripts/run_lockstep.sh
+
+# 2e. Pipeline: differential check vs the single-cycle reference
 make -C sim/verilator pipe            # builds obj_dir_pipe/Vcore_pipe
 bash scripts/run_pipe_diff.sh            # directed + randomized HAZARDOUS programs
                                       # + the ISA suite run on the pipeline

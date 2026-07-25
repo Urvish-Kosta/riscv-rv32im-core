@@ -11,6 +11,7 @@ verilator.log
 *.log
 sw/tests/build/
 sw/tests/pipe/build/
+sw/bench/build/
 
 # ---- RISC-V build artifacts ----
 *.elf

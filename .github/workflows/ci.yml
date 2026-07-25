@@ -33,5 +33,7 @@ jobs:
         run: make -C sw/tests run
       - name: Pipeline differential + hazardous-random + ISA-on-pipeline (all predictor modes)
         run: bash scripts/run_pipe_diff.sh
+      - name: Lockstep retire-trace comparison vs reference core
+        run: bash scripts/run_lockstep.sh
       - name: Measured benchmarks (self-checking, all predictor modes)
         run: bash scripts/run_benchmarks.sh

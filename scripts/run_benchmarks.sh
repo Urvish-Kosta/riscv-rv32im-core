@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run_benchmarks.sh -- measured CPI / branch statistics (M5).
+# run_benchmarks.sh -- measured CPI / branch statistics (M5, extended at M6).
 #
-# Builds the pipeline, runs each benchmark in sw/bench/ under all three branch
-# predictor modes (off / bimodal / gshare) and prints the *measured* numbers
-# from the simulation harness. Every figure is observed in the run performed by
-# this script; nothing is estimated. Benchmarks are self-checking -- a run only
-# counts if its architectural result is correct (exit PASS).
+# Builds every benchmark in sw/bench/ (assembly kernels and C kernels), runs
+# each under all three branch-predictor modes, and prints the measured numbers
+# reported by the harness. Every figure comes from the run this script just
+# performed; nothing is estimated.
+#
+# Benchmarks are self-checking: a run is only reported if it produced the
+# correct architectural result (the C kernels check against golden values
+# derived independently on the host -- see sw/bench/expected.h).
+#
+#   ./scripts/run_benchmarks.sh                # human-readable table
+#   ./scripts/run_benchmarks.sh --csv out.csv  # + machine-readable results
 # =============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+CSV=""
+[[ "${1:-}" == "--csv" ]] && CSV="${2:?--csv needs a path}"
 
 RISCV_PREFIX=""
 for p in riscv32-unknown-elf- riscv64-unknown-elf- riscv-none-elf-; do
@@ -21,37 +30,44 @@ if [[ -n "$RISCV_PREFIX" ]]; then
 else
   CC="clang --target=riscv32-unknown-elf -fuse-ld=lld"; OBJCOPY="llvm-objcopy"
 fi
-CFLAGS="-march=rv32im_zicsr -mabi=ilp32 -mno-relax -nostdlib -nostartfiles -ffreestanding -Wl,-T,sw/common/link.ld"
+CFLAGS="-march=rv32im_zicsr -mabi=ilp32 -mno-relax -nostdlib -nostartfiles -ffreestanding"
+CFLAGS="$CFLAGS -Isw/common -Isw/bench -Wl,-T,sw/common/link.ld"
 
 make -C sim/verilator pipe >/dev/null
 PIPE=sim/verilator/obj_dir_pipe/Vcore_pipe
 B=sw/bench/build; mkdir -p "$B"
 
+[[ -n "$CSV" ]] && echo "benchmark,mode,cycles,retired,cpi,stall_loaduse,stall_mdu,redirects,branches,taken,mispredicts" > "$CSV"
+
 fail=0
-printf "%-12s %-8s %10s %8s %7s %9s %9s %6s %6s %7s\n" \
-  bench mode cycles retired CPI ld-stall mdu-stall br misp misp%
-for src in sw/bench/*.S; do
-  name="$(basename "$src" .S)"
-  $CC $CFLAGS "$src" -o "$B/$name.elf"
+printf "%-14s %-8s %10s %9s %7s %9s %9s %7s %6s %7s\n" \
+  benchmark mode cycles retired CPI ld-stall mdu-stall br misp misp%
+printf '%.0s-' {1..96}; echo
+for src in sw/bench/*.S sw/bench/*.c; do
+  [[ -e "$src" ]] || continue
+  name="$(basename "$src")"; name="${name%.*}"
+  if [[ "$src" == *.c ]]; then
+    $CC $CFLAGS -O2 sw/common/crt0.S "$src" -o "$B/$name.elf" || { echo "$name: BUILD FAILED"; fail=1; continue; }
+  else
+    $CC $CFLAGS "$src" -o "$B/$name.elf" || { echo "$name: BUILD FAILED"; fail=1; continue; }
+  fi
   $OBJCOPY -O binary "$B/$name.elf" "$B/$name.bin"
   python3 tools/bin2hex.py "$B/$name.bin" "$B/$name.hex"
   for mode in off bimodal gshare; do
-    out="$("$PIPE" +hex="$B/$name.hex" +bp=$mode +max_cycles=2000000 2>&1)"
+    out="$("$PIPE" +hex="$B/$name.hex" +bp=$mode +max_cycles=5000000 2>&1)"
     if ! grep -q "PASS" <<<"$out"; then
       echo "$name/$mode: FAILED SELF-CHECK"; fail=1; continue
     fi
     perf="$(grep -oE '\[perf\].*' <<<"$out")"
-    cyc=$(grep -oE 'cycles=[0-9]+' <<<"$perf" | cut -d= -f2)
-    ret=$(grep -oE 'retired=[0-9]+' <<<"$perf" | cut -d= -f2)
-    cpi=$(grep -oE 'cpi=[0-9.]+' <<<"$perf" | cut -d= -f2)
-    lds=$(grep -oE 'stall_loaduse=[0-9]+' <<<"$perf" | cut -d= -f2)
-    mds=$(grep -oE 'stall_mdu=[0-9]+' <<<"$perf" | cut -d= -f2)
-    br=$(grep -oE 'branches=[0-9]+' <<<"$perf" | cut -d= -f2)
-    mp=$(grep -oE 'br_mispred=[0-9]+' <<<"$perf" | cut -d= -f2)
-    pct="-"
-    [[ "$br" -gt 0 ]] && pct=$(python3 -c "print(f'{100*$mp/$br:.1f}')")
-    printf "%-12s %-8s %10s %8s %7s %9s %9s %6s %6s %6s%%\n" \
+    g() { grep -oE "$1=[0-9.]+" <<<"$perf" | cut -d= -f2; }
+    cyc=$(g cycles); ret=$(g retired); cpi=$(g cpi)
+    lds=$(g stall_loaduse); mds=$(g stall_mdu); rdr=$(g redirects)
+    br=$(g branches); tk=$(g taken); mp=$(g br_mispred)
+    pct="-"; [[ "$br" -gt 0 ]] && pct=$(python3 -c "print(f'{100*$mp/$br:.1f}')")
+    printf "%-14s %-8s %10s %9s %7s %9s %9s %7s %6s %6s%%\n" \
       "$name" "$mode" "$cyc" "$ret" "$cpi" "$lds" "$mds" "$br" "$mp" "$pct"
+    [[ -n "$CSV" ]] && echo "$name,$mode,$cyc,$ret,$cpi,$lds,$mds,$rdr,$br,$tk,$mp" >> "$CSV"
   done
 done
+[[ -n "$CSV" ]] && echo && echo "wrote $CSV"
 exit $fail

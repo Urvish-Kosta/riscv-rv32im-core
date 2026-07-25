@@ -36,10 +36,6 @@ how to add the real sources. Spike lockstep + official `riscv-tests` remain the
 documented plan of record (not run here — no Spike in the build environment;
 nothing claims otherwise).
 
-There are **no measured performance results yet.** CPI/IPC, misprediction rates,
-and stall breakdowns are produced only from committed, re-runnable scripts at
-M5–M6, and this README will not state any such number before it has been measured.
-
 | Milestone | What it delivers | State |
 |---|---|---|
 | **M0** | Repo skeleton, toolchain install/verify, Spike hello, Verilator smoke, CI | **done** |
@@ -117,25 +113,34 @@ Python 3 + matplotlib/pandas (trace/perf tooling, from M5).
 
 ## Verification approach
 
-**Current state (M3):** a two-link differential chain, with every link
-independently anchored:
+**Current state (M6):** the strongest evidence in the project is a **lockstep
+retire-trace comparison** — both cores emit an identical-format retire trace
+(one record per committed instruction), and `tools/trace_compare.py` diffs
+them record-by-record, localizing any first divergence to the exact
+instruction rather than a single end-of-run signature. The verified
+single-cycle core is the golden model (the same workflow Spike lockstep would
+use). Current result: **18 programs, 332,134 retired instructions compared,
+0 divergences** — the self-checking ISA suite plus all eight benchmark
+kernels, five of which are compiled C (real compiler output: prologues,
+spills, recursion, byte/half memory traffic).
+
+That sits on top of the differential chain built through M1–M5, with every
+link independently anchored:
 
 1. The **single-cycle core** is verified by self-checking directed tests whose
    expected values are derived by hand from the ISA — an oracle independent of
    any core.
 2. The **pipeline** is verified against that reference: directed + randomized
    *hazardous* programs (committed seeds) must produce bit-identical `tohost`
-   signatures on both cores, and the full self-checking ISA suite also runs
-   directly on the pipeline. The M2→M3 before/after is explicit: the hazardous
-   program that provably diverged on the un-forwarded pipeline now matches at
-   its hand-derived value.
+   signatures on both cores, across all three branch-predictor modes, and the
+   full self-checking ISA suite also runs directly on the pipeline.
 
-**Plan of record (not yet run):** lockstep trace-comparison against **Spike**
-and the official **`riscv-tests`** — a divergence localizes a bug to the exact
-instruction. Spike was not available in the build environment used so far, and
-no Spike result is claimed anywhere; the `tohost` protocol these tests already
-use is the same one Spike/`riscv-tests` rely on, so wiring them in is additive.
-Committed `.gtkw` waveforms for each hazard class arrive with the M5–M6 tooling.
+**Plan of record (not yet run):** lockstep comparison against **Spike** itself
+and the official **`riscv-tests`**. Spike was not available in the build
+environment used so far, and no Spike result is claimed anywhere; the
+`tohost` protocol these tests already use is the same one Spike/`riscv-tests`
+rely on, so wiring them in is additive to the trace-comparison infrastructure
+already built. See `docs/verification.md` for the full per-milestone record.
 
 ## Limitations
 

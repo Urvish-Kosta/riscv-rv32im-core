@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <cstring>
 #include <memory>
 
@@ -50,6 +51,22 @@ int main(int argc, char** argv) {
 
     const uint64_t max_cycles = plusarg_u(ctx.get(), "max_cycles", 100000);
     const bool     trace_on   = plusarg_set(ctx.get(), "trace");
+
+    // +trace_file=<path>: machine-readable *retire* trace. One record per
+    // architecturally committed instruction, identical in format for both
+    // cores, so tools/trace_compare.py can diff them instruction-by-
+    // instruction (the same shape as a Spike lockstep comparison, using the
+    // verified single-cycle core as the golden model).
+    std::FILE* tf = nullptr;
+    {
+        const char* m  = ctx->commandArgsPlusMatch("trace_file");
+        const char* eq = std::strchr(m, '=');
+        if (eq) {
+            tf = std::fopen(eq + 1, "w");
+            if (!tf) { std::fprintf(stderr, "cannot open trace file %s\n", eq + 1); return 2; }
+            std::fprintf(tf, "# cycle pc instr rd wdata memaddr memdata\n");
+        }
+    }
 
     const std::unique_ptr<Dut> dut{new Dut{ctx.get()}};
 
@@ -93,6 +110,13 @@ int main(int argc, char** argv) {
     int      exit_code = -1;
     uint32_t tohost_val = 0;
     uint64_t cyc = 0, retired = 0;
+    // Performance is measured at the halt cycle. After the halting store
+    // commits (in MEM on the pipeline) the simulator runs a few extra cycles
+    // *for the trace only*, so the retiring stream drains and both cores emit
+    // identical retire traces. These drain cycles are excluded from the
+    // reported cycle/retire counts.
+    uint64_t halt_cyc = 0, halt_retired = 0;
+    int      drain = -1;
     for (; cyc < max_cycles; ++cyc) {
         half(0);   // low phase: combinational settled
 
@@ -109,20 +133,53 @@ int main(int argc, char** argv) {
         }
 
 #if defined(DUT_PIPE)
-        if (dut->dbg_retire) ++retired;
+        const bool retire_now = dut->dbg_retire;
+#else
+        const bool retire_now = true;   // single-cycle: one retire per cycle
 #endif
-        if (dut->dbg_dmem_we && dut->dbg_dmem_addr == TOHOST) {
-            tohost_val = dut->dbg_dmem_wdata;
-            exit_code  = (tohost_val == 1u) ? 0 : (int)(tohost_val >> 1);
+        if (retire_now) ++retired;
+
+        // The trace ends exactly when the halting store *retires*, so both
+        // cores produce identical retire streams regardless of pipeline depth.
+        bool halt_store_retired = false;
+        if (tf && retire_now) {
+            std::fprintf(tf, "%llu %08x %08x ", (unsigned long long)cyc,
+                         (unsigned)dut->dbg_pc, (unsigned)dut->dbg_instr);
+            if (dut->dbg_reg_we)
+                std::fprintf(tf, "x%u %08x ", (unsigned)dut->dbg_rd,
+                             (unsigned)dut->dbg_wb_data);
+            else
+                std::fprintf(tf, "- - ");
+            if (dut->dbg_r_mem_we) {
+                std::fprintf(tf, "%08x %08x\n", (unsigned)dut->dbg_r_mem_addr,
+                             (unsigned)dut->dbg_r_mem_data);
+                if (dut->dbg_r_mem_addr == TOHOST) halt_store_retired = true;
+            } else {
+                std::fprintf(tf, "- -\n");
+            }
+        }
+
+        if (drain < 0 && dut->dbg_dmem_we && dut->dbg_dmem_addr == TOHOST) {
+            tohost_val   = dut->dbg_dmem_wdata;
+            exit_code    = (tohost_val == 1u) ? 0 : (int)(tohost_val >> 1);
+            halt_cyc     = cyc;
+            halt_retired = retired;
+            if (!tf) { half(1); break; }   // no trace: stop immediately
+            drain = 4;                     // trace-only drain of the pipe
+        } else if (drain >= 0 && --drain < 0) {
             half(1);
             break;
         }
+        // Stop as soon as the halting store has retired: both cores then emit
+        // exactly the same retire stream, whatever their pipeline depth.
+        if (halt_store_retired) { half(1); break; }
         half(1);   // high phase: posedge commits state
     }
 
 #if VM_TRACE
     if (tfp) tfp->close();
 #endif
+    if (tf) std::fclose(tf);
 
     if (exit_code < 0) {
         std::printf("[core] TIMEOUT after %llu cycles (no tohost write)\n",
@@ -130,17 +187,23 @@ int main(int argc, char** argv) {
         return 124;
     }
     std::printf("[core] halted @cycle %llu  tohost=0x%08x  ->  %s (exit=%d)\n",
-                (unsigned long long)cyc, tohost_val,
+                (unsigned long long)halt_cyc, tohost_val,
                 exit_code == 0 ? "PASS" : "FAIL", exit_code);
+#if !defined(DUT_PIPE)
+    if (halt_retired > 0)
+        std::printf("[perf] cycles=%llu retired=%llu cpi=%.3f (single-cycle reference)\n",
+                    (unsigned long long)halt_cyc, (unsigned long long)halt_retired,
+                    (double)halt_cyc / (double)halt_retired);
+#endif
 #if defined(DUT_PIPE)
     // Measured performance report (pipeline only). Every number below is
     // observed in this run -- nothing is estimated.
-    if (retired > 0)
+    if (halt_retired > 0)
         std::printf("[perf] cycles=%llu retired=%llu cpi=%.3f "
                     "stall_loaduse=%u stall_mdu=%u redirects=%u "
                     "branches=%u taken=%u br_mispred=%u\n",
-                    (unsigned long long)cyc, (unsigned long long)retired,
-                    (double)cyc / (double)retired,
+                    (unsigned long long)halt_cyc, (unsigned long long)halt_retired,
+                    (double)halt_cyc / (double)halt_retired,
                     (unsigned)dut->dbg_n_loaduse, (unsigned)dut->dbg_n_mdu,
                     (unsigned)dut->dbg_n_redirect, (unsigned)dut->dbg_n_br,
                     (unsigned)dut->dbg_n_br_tk, (unsigned)dut->dbg_n_br_mp);

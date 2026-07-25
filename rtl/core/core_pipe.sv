@@ -30,6 +30,14 @@ module core_pipe import riscv_pkg::*; (
     input  logic            rst_n,
     input  logic [1:0]      cfg_bp_mode,   // 0 off, 1 bimodal, 2 gshare
     output logic            dbg_retire,    // valid instruction retiring (WB)
+    // Retire-aligned store info: the dbg_dmem_* port below is EX/MEM (needed
+    // for the harness's tohost exit, which must fire when the store commits),
+    // but in a pipeline that is a *different* instruction from the one
+    // retiring in WB. These mirror the store of the retiring instruction so
+    // the retire trace is internally consistent.
+    output logic            dbg_r_mem_we,
+    output logic [XLEN-1:0] dbg_r_mem_addr,
+    output logic [XLEN-1:0] dbg_r_mem_data,
     output logic [31:0]     dbg_n_loaduse, // perf: load-use stall cycles
     output logic [31:0]     dbg_n_mdu,     // perf: MDU stall cycles
     output logic [31:0]     dbg_n_redirect,// perf: control redirects (all)
@@ -366,7 +374,8 @@ module core_pipe import riscv_pkg::*; (
     end
 
     // MEM/WB
-    logic [XLEN-1:0] memwb_data, memwb_pc;
+    logic [XLEN-1:0] memwb_data, memwb_pc, memwb_mem_addr, memwb_mem_data;
+    logic            memwb_mem_we;
     logic [4:0]      memwb_rd;
     logic [31:0]     memwb_instr;
     logic            memwb_reg_write, memwb_valid;
@@ -376,10 +385,13 @@ module core_pipe import riscv_pkg::*; (
             memwb_reg_write <= 1'b0; memwb_data <= '0; memwb_rd <= 5'd0;
             memwb_pc <= RESET_PC; memwb_instr <= 32'h0000_0013;
             memwb_valid <= 1'b0;
+            memwb_mem_we <= 1'b0; memwb_mem_addr <= '0; memwb_mem_data <= '0;
         end else begin
             memwb_reg_write <= exmem_reg_write; memwb_data <= mem_wb_data;
             memwb_rd <= exmem_rd; memwb_pc <= exmem_pc; memwb_instr <= exmem_instr;
             memwb_valid <= exmem_valid;
+            memwb_mem_we <= exmem_mem_write; memwb_mem_addr <= exmem_alu_y;
+            memwb_mem_data <= exmem_rs2d;
         end
     end
 
@@ -465,6 +477,9 @@ module core_pipe import riscv_pkg::*; (
 
     // ========================================================= debug/trace
     assign dbg_retire     = memwb_valid;
+    assign dbg_r_mem_we   = memwb_mem_we;
+    assign dbg_r_mem_addr = memwb_mem_addr;
+    assign dbg_r_mem_data = memwb_mem_data;
     assign dbg_pc         = memwb_pc;
     assign dbg_instr      = memwb_instr;
     assign dbg_reg_we     = memwb_reg_write && (memwb_rd != 5'd0);

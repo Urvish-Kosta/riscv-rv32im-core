@@ -18,6 +18,12 @@ module core_top import riscv_pkg::*; (
     output logic            dbg_reg_we,
     output logic [4:0]      dbg_rd,
     output logic [XLEN-1:0] dbg_wb_data,
+    // Retire-aligned store info. In the single-cycle core the executing and
+    // retiring instruction are the same, so these mirror dbg_dmem_*; they
+    // exist so both cores present an identical retire-trace interface.
+    output logic            dbg_r_mem_we,
+    output logic [XLEN-1:0] dbg_r_mem_addr,
+    output logic [XLEN-1:0] dbg_r_mem_data,
     output logic            dbg_dmem_we,
     output logic [XLEN-1:0] dbg_dmem_addr,
     output logic [XLEN-1:0] dbg_dmem_wdata
@@ -175,6 +181,9 @@ module core_top import riscv_pkg::*; (
     assign dbg_reg_we     = reg_write && (rd != 5'd0);
     assign dbg_rd         = rd;
     assign dbg_wb_data    = wb_data;
+    assign dbg_r_mem_we   = mem_write;
+    assign dbg_r_mem_addr = alu_y;
+    assign dbg_r_mem_data = rs2_data;
     assign dbg_dmem_we    = mem_write;
     assign dbg_dmem_addr  = alu_y;
     assign dbg_dmem_wdata = rs2_data;

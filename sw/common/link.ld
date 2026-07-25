@@ -19,9 +19,15 @@ SECTIONS
 
   .rodata    : { *(.rodata) *(.rodata.*) }
   .data      : { *(.data) *(.data.*) }
+  __bss_start = .;
   .bss       : { *(.bss)  *(.bss.*) *(COMMON) }
+  __bss_end   = .;
 
   /* HTIF mailbox. Spike resolves these symbols to drive host <-> target I/O. */
   . = ALIGN(0x1000);
   .tohost : { *(.tohost) }
+
+  /* Stack for C benchmarks: grows down from the top of the 64 KiB data
+     memory modelled by rtl/mem/dmem.sv. Assembly tests do not use it. */
+  _stack_top = 0x8000F000;
 }

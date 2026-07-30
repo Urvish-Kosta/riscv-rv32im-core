@@ -1,0 +1,59 @@
+[*] GTKWave save file for hazard_showcase.vcd
+[*] Regenerate both with: bash scripts/make_waves.sh
+[dumpfile] "hazard_showcase.vcd"
+[timestart] 0
+[size] 1600 900
+[pos] -1 -1
+*-16.0 -1 -1 -1 -1 -1 -1 -1
+[treeopen] TOP.
+[treeopen] TOP.core_pipe.
+[sst_width] 260
+[signals_width] 300
+[sst_expanded] 1
+[sst_vpaned_height] 300
+@28
+TOP.core_pipe.clk
+TOP.core_pipe.rst_n
+@800200
+-- fetch / control flow --
+@22
+TOP.core_pipe.pc_if[31:0]
+TOP.core_pipe.ifid_pc[31:0]
+TOP.core_pipe.idex_pc[31:0]
+@28
+TOP.core_pipe.bp_pred_taken
+TOP.core_pipe.redirect
+@22
+TOP.core_pipe.redirect_pc[31:0]
+@800200
+-- stalls --
+@28
+TOP.core_pipe.stall
+TOP.core_pipe.load_use_stall
+TOP.core_pipe.mdu_stall
+TOP.core_pipe.idex_is_mdu
+@800200
+-- execute / forwarding --
+@22
+TOP.core_pipe.ex_rs1_fwd[31:0]
+TOP.core_pipe.ex_result[31:0]
+@800200
+-- retire (architectural effect) --
+@28
+TOP.core_pipe.dbg_retire
+@22
+TOP.core_pipe.dbg_pc[31:0]
+TOP.core_pipe.dbg_instr[31:0]
+@28
+TOP.core_pipe.dbg_reg_we
+@22
+TOP.core_pipe.dbg_rd[4:0]
+TOP.core_pipe.dbg_wb_data[31:0]
+@800200
+-- performance counters --
+@22
+TOP.core_pipe.dbg_n_loaduse[31:0]
+TOP.core_pipe.dbg_n_mdu[31:0]
+TOP.core_pipe.dbg_n_br_mp[31:0]
+[pattern_trace] 1
+[pattern_trace] 0

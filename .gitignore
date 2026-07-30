@@ -1,6 +1,9 @@
 # ---- Verilator ----
-obj_dir/
+# Verilator output dirs: obj_dir, obj_dir_pipe, obj_dir_mdu, ...
+obj_dir*/
 *.vcd
+# ...but the committed hazard-showcase waveform is evidence, not build output
+!sim/waves/*.vcd
 *.fst
 *.fst.hier
 verilator.log
@@ -12,6 +15,9 @@ verilator.log
 sw/tests/build/
 sw/tests/pipe/build/
 sw/bench/build/
+
+# ---- Generated retire traces ----
+*.trace
 
 # ---- RISC-V build artifacts ----
 *.elf

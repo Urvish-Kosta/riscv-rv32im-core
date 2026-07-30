@@ -1,13 +1,8 @@
 # Verification
 
-> **Status:** current as of milestone **M6** (lockstep retire-trace comparison).
->
-> This document is a running log, oldest first — each milestone section below
-> is left intact as the record of what was verified and how, at that point in
-> the project. The M6 section at the bottom describes the current, strongest
-> method.
+> **Status:** current as of milestone **M1** (single-cycle RV32I core).
 
-## M1 — single-cycle core (self-checking directed tests)
+## What is verified today (M1)
 
 The single-cycle core is verified by **self-checking directed tests**: small
 assembly programs, each of which computes results and compares them against

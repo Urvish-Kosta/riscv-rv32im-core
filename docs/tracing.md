@@ -6,7 +6,7 @@
 
 Both cores emit a **retire trace** with `+trace_file=<path>`: one record per
 architecturally committed instruction, in the same format regardless of
-microarchitecture.
+microarchitecture. Waveform dumping is a separate flag, `+vcd`.
 
 ```
 # cycle pc instr rd wdata memaddr memdata
@@ -26,6 +26,14 @@ Two details make the traces directly comparable:
   pipeline depth does not change the record count. Performance counters are
   snapshotted at the halt cycle, so the few drain cycles never inflate a
   measurement.
+
+> **A bug worth knowing about if you extend the harness.** Verilator's
+> `commandArgsPlusMatch()` matches plusargs by *prefix*, so a query for
+> `trace` also matches `+trace_file=...`. The VCD flag was originally called
+> `+trace`, which meant every lockstep run silently dumped a full waveform —
+> hundreds of megabytes on a long benchmark, and a large slowdown. The flags
+> are now distinct (`+vcd` vs `+trace_file=`) and the matcher requires an
+> exact argument match.
 
 ## `tools/trace_compare.py` — lockstep comparison
 
@@ -68,3 +76,25 @@ cycles lost to stalls and flushes**, and are called out inline:
 That gap is a load-use stall (1 cycle) followed by the iterative divide
 (34 cycles) — the microarchitecture's cost, visible per instruction.
 `--stats` summarizes instruction mix and CPI over the traced window.
+
+## Committed waveform
+
+`sim/waves/hazard_showcase.vcd` is a short (59-cycle) run of
+`sw/tests/pipe/hazard_showcase.S`, a program written to exhibit every hazard
+class in as few cycles as possible: back-to-back RAW (EX/MEM forwarding),
+distance-2 RAW (MEM/WB forwarding), a load-use pair (1-cycle stall), a taken
+branch (2-cycle flush), and a multiply (~34-cycle EX stall). The run's own
+counters confirm the intended events occurred:
+
+```
+[perf] cycles=59 retired=17 cpi=3.471 stall_loaduse=1 stall_mdu=34
+       redirects=3 branches=2 taken=1 br_mispred=1
+```
+
+Open it with the committed save file, which pre-selects the fetch/redirect,
+stall, forwarding, retire, and counter signals:
+
+```sh
+gtkwave sim/waves/hazard_showcase.vcd sim/waves/hazard_showcase.gtkw
+bash scripts/make_waves.sh      # regenerate both
+```

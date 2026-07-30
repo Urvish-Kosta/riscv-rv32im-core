@@ -11,8 +11,8 @@
 // On halt the raw 32-bit tohost value is printed, so a driver can compare the
 // pipeline against the single-cycle reference bit-for-bit.
 //
-//   ./Vcore_top  +hex=prog.hex [+max_cycles=N] [+trace]
-//   ./Vcore_pipe +hex=prog.hex [+max_cycles=N] [+trace]
+//   ./Vcore_top  +hex=prog.hex [+max_cycles=N] [+vcd] [+trace_file=f]
+//   ./Vcore_pipe +hex=prog.hex [+max_cycles=N] [+vcd] [+trace_file=f]
 // -----------------------------------------------------------------------------
 #include <verilated.h>
 
@@ -41,8 +41,13 @@ static uint64_t plusarg_u(VerilatedContext* ctx, const char* key, uint64_t dflt)
     const char* eq = std::strchr(m, '=');
     return eq ? std::strtoull(eq + 1, nullptr, 0) : dflt;
 }
+// NOTE: commandArgsPlusMatch() matches by *prefix*, so a query for "trace"
+// also matches "+trace_file=...". Require the matched argument to be exactly
+// "+<key>" so the flags stay independent. (This bug made every +trace_file
+// run also dump a full VCD -- hundreds of MB on a long benchmark.)
 static bool plusarg_set(VerilatedContext* ctx, const char* key) {
-    return ctx->commandArgsPlusMatch(key)[0] != '\0';
+    const std::string m = ctx->commandArgsPlusMatch(key);
+    return m == (std::string("+") + key);
 }
 
 int main(int argc, char** argv) {
@@ -50,7 +55,7 @@ int main(int argc, char** argv) {
     ctx->commandArgs(argc, argv);
 
     const uint64_t max_cycles = plusarg_u(ctx.get(), "max_cycles", 100000);
-    const bool     trace_on   = plusarg_set(ctx.get(), "trace");
+    const bool     trace_on   = plusarg_set(ctx.get(), "vcd");   // +vcd -> wave.vcd
 
     // +trace_file=<path>: machine-readable *retire* trace. One record per
     // architecturally committed instruction, identical in format for both

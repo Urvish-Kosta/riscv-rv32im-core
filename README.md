@@ -2,10 +2,10 @@
 
 A from-scratch **RV32IM** RISC-V core in SystemVerilog: a 5-stage pipeline with
 full hazard handling, an iterative multiply/divide unit, and a configurable
-branch predictor — verified instruction-by-instruction against its own
+branch predictor - verified instruction-by-instruction against its own
 single-cycle reference model, and measured with on-chip performance counters.
 
-<!-- Badge URLs assume GitHub user `Urvish-Kosta` — confirm before pushing. -->
+<!-- Badge URLs assume GitHub user `Urvish-Kosta` - confirm before pushing. -->
 [![CI](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Urvish-Kosta/riscv-rv32im-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![ISA](https://img.shields.io/badge/ISA-RV32IM%20%2B%20Zicsr%20(counters)-informational)
@@ -16,7 +16,7 @@ single-cycle reference model, and measured with on-chip performance counters.
 > repository was produced by a committed script that anyone can re-run; none is
 > estimated, and no industry-standard benchmark score (DMIPS or otherwise) is
 > claimed. The reference model used for lockstep comparison is this project's
-> own verified single-cycle core, **not** Spike — see
+> own verified single-cycle core, **not** Spike - see
 > [Verification](#verification).
 
 ---
@@ -25,7 +25,7 @@ single-cycle reference model, and measured with on-chip performance counters.
 
 | | |
 |---|---|
-| **Correctness** | 332,134 retired instructions compared in lockstep against the reference core across 18 programs — **0 divergences** |
+| **Correctness** | 332,134 retired instructions compared in lockstep against the reference core across 18 programs - **0 divergences** |
 | **ISA** | RV32I + RV32M, plus read-only `cycle`/`instret` and six performance CSRs |
 | **Best measured CPI** | **1.00** on branch-predictable kernels (gshare); 1.16 on insertion sort |
 | **Branch prediction** | strictly alternating branch: **50.1% → 0.3%** mispredicts moving bimodal → gshare |
@@ -44,13 +44,13 @@ how to read it honestly: [`docs/benchmarks.md`](docs/benchmarks.md)
   *functional reference*; `core_pipe.sv` is the 5-stage pipeline under test.
   Sharing the leaf modules and one behavioural spec function is what makes the
   differential verification meaningful rather than circular.
-- **Hazard handling** — forwarding from EX/MEM and MEM/WB into EX, a WB→ID
+- **Hazard handling** - forwarding from EX/MEM and MEM/WB into EX, a WB→ID
   bypass, a single-bubble load-use stall, and a 2-cycle control flush.
-- **RV32M** — iterative ~34-cycle multiply/divide stalling in EX, including the
+- **RV32M** - iterative ~34-cycle multiply/divide stalling in EX, including the
   spec's divide-by-zero and `MIN_INT / -1` results.
-- **Branch prediction** — full-tag 64-entry BTB + 256×2-bit PHT, selectable at
+- **Branch prediction** - full-tag 64-entry BTB + 256×2-bit PHT, selectable at
   runtime between `off`, `bimodal`, and `gshare`.
-- **Measurement** — six performance counters readable as CSRs, plus a retire
+- **Measurement** - six performance counters readable as CSRs, plus a retire
   trace, lockstep comparator, annotated trace viewer, and report/plot
   generators.
 
@@ -59,23 +59,23 @@ how to read it honestly: [`docs/benchmarks.md`](docs/benchmarks.md)
 Correctness rests on a chain in which every link is independently anchored:
 
 1. **ISA-derived expectations.** Self-checking assembly tests whose expected
-   values were derived by hand from the RISC-V spec — an oracle independent of
-   any core — validate the single-cycle reference.
+   values were derived by hand from the RISC-V spec - an oracle independent of
+   any core - validate the single-cycle reference.
 2. **Reference → pipeline, in lockstep.** Both cores emit an identical-format
    retire trace; `tools/trace_compare.py` diffs them record-by-record and
    localizes any first divergence to an exact instruction. 18 programs,
    **332,134 instructions, 0 divergences**, including five compiled C kernels
    (real compiler output: prologues, spills, recursion, byte/half traffic).
 3. **Adversarial randomized programs.** A committed generator emits hazardous
-   straight-line code — dense RAW chains, immediate load-use consumption,
-   store-data forwarding, mixed-in M ops — compared across all three predictor
+   straight-line code - dense RAW chains, immediate load-use consumption,
+   store-data forwarding, mixed-in M ops - compared across all three predictor
    modes.
 4. **Unit-level proof where it matters.** The iterative MDU is checked
    exhaustively on edge operands against `riscv_pkg::mdu_func`, the single
    behavioural encoding of the M-spec that the reference core also uses.
 
 **On Spike:** lockstep against Spike plus the official `riscv-tests` is the
-documented plan of record and is *not* claimed as done — Spike could not be
+documented plan of record and is *not* claimed as done - Spike could not be
 installed in the environment this was built in. The methodology above is
 deliberately Spike-shaped (same HTIF `tohost` protocol, same lockstep
 comparison), so adopting it later changes the golden model, not the approach.
@@ -97,14 +97,14 @@ See [`docs/verification.md`](docs/verification.md).
 ## Why this exists
 
 The gap it closes: porting and integrating an existing core shows "I can bring
-up a CPU." This project is the next tier — *architecting* a pipeline and
+up a CPU." This project is the next tier - *architecting* a pipeline and
 reasoning about its microarchitecture: the three hazard classes, forwarding
 paths and their critical-path trade-offs, dynamic branch prediction, and CPI
 analysis grounded in measurement rather than assertion.
 
-Correctness is argued the way production teams argue it — an independently
+Correctness is argued the way production teams argue it - an independently
 anchored golden model, lockstep retire-trace comparison, adversarial randomized
-stimulus, and unit-level proof of the trickiest arithmetic — and every claim in
+stimulus, and unit-level proof of the trickiest arithmetic - and every claim in
 this repository is reproducible from committed scripts in a hardware-free flow.
 
 Two things this project treats as first-class, and which the documentation
@@ -116,7 +116,7 @@ records rather than hides:
   needing a 33-bit partial remainder; trace records attached to the wrong
   instruction; and a test of mine that made an implementation-dependent
   assumption the pipeline correctly refused to satisfy.
-- **What is deliberately not here** — no FPGA/silicon claims, no Spike results,
+- **What is deliberately not here** - no FPGA/silicon claims, no Spike results,
   no Dhrystone approximation, no privileged spec. Each omission is stated with
   its reason.
 
@@ -139,7 +139,7 @@ riscv-rv32im-core/
 ## Quick start
 
 Requires Verilator, a RISC-V cross-compiler (LLVM/clang or a
-`riscv*-unknown-elf` GNU toolchain — the build scripts auto-detect either),
+`riscv*-unknown-elf` GNU toolchain - the build scripts auto-detect either),
 Python 3, and GNU Make. No hardware, no licensed tools.
 
 ```sh
@@ -219,13 +219,13 @@ Also: [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) ·
 ## Limitations
 
 Simulation-only: no FPGA or silicon, and therefore no synthesis timing, area,
-or power numbers — the design has not been through a synthesis flow, and this
+or power numbers - the design has not been through a synthesis flow, and this
 repository claims nothing about its clock frequency.
 
 The ISA is RV32IM plus read-only counter CSRs. There is no privileged spec, no
 traps or interrupts, no virtual memory, and no A/C/F/D extensions; `FENCE`,
 `ECALL`, and `EBREAK` decode as NOPs. Memory is a pair of single-cycle Harvard
-arrays — there is no cache hierarchy, so nothing here measures memory-system
+arrays - there is no cache hierarchy, so nothing here measures memory-system
 behaviour. `docs/isa-support.md` lists the implemented set exactly.
 
 The reference model for lockstep comparison is this project's own single-cycle
@@ -239,15 +239,15 @@ sibling repos**, not part of this one.
 The microarchitecture was derived from these sources rather than copied from an
 existing implementation; the RTL in this repository is written from scratch.
 
-- *The RISC-V Instruction Set Manual, Volume I: Unprivileged ISA* — the
+- *The RISC-V Instruction Set Manual, Volume I: Unprivileged ISA* - the
   normative reference for every instruction implemented here, including the
   RV32M divide-by-zero and `MIN_INT / -1` results encoded in
   `riscv_pkg::mdu_func`.
-- Patterson & Hennessy, *Computer Organization and Design, RISC-V Edition* —
+- Patterson & Hennessy, *Computer Organization and Design, RISC-V Edition* -
   the classic 5-stage pipeline, forwarding paths, and the single-bubble
   load-use stall.
 - Harris & Harris, *Digital Design and Computer Architecture, RISC-V Edition*.
-- S. McFarling, *Combining Branch Predictors* (WRL TN-36, 1993) — gshare.
+- S. McFarling, *Combining Branch Predictors* (WRL TN-36, 1993) - gshare.
 - Verilator documentation, for the simulation and lint flow.
 
 `riscv-tests` and `riscv-isa-sim` (Spike) are referenced as the plan of record
@@ -255,11 +255,11 @@ for future verification work; neither is used or vendored here.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 ## Author
 
-**Urvish Kosta** — Embedded Systems & Digital Design Engineer.
+**Urvish Kosta** - Embedded Systems & Digital Design Engineer.
 GitHub: [@Urvish-Kosta](https://github.com/Urvish-Kosta)
 <!-- Confirm this username before publishing: it also appears in the CI badge
      URLs at the top of this file. -->
@@ -267,4 +267,4 @@ GitHub: [@Urvish-Kosta](https://github.com/Urvish-Kosta)
 Every design decision in this repository is recorded with its reasoning and
 trade-off in [`docs/design-decisions.md`](docs/design-decisions.md), and every
 bug found by running the code is documented with the symptom that exposed it.
-Both are there to be interrogated — questions and corrections are welcome.
+Both are there to be interrogated - questions and corrections are welcome.
